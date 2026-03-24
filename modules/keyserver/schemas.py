@@ -22,6 +22,12 @@ class RegisterResponse(BaseModel):
     token_type: str = "Bearer"
 
 
+class RefreshRequest(BaseModel):
+    """Request body for token refresh."""
+
+    refresh_token: str
+
+
 class KeyBundleSchema(BaseModel):
     """
     Schema for public key bundle.
