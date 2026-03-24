@@ -47,7 +47,7 @@ class TestAttemptLimits:
             rate_limiter.record_attempt(client_id)
 
         # All 5 should succeed without exception
-        assert len(rate_limiter.attempts[client_id]) == 5
+        assert len(rate_limiter.backend.attempts[client_id]) == 5
 
     def test_totp_locks_after_5_attempts(self, rate_limiter):
         """6th attempt should trigger lockout"""
@@ -135,10 +135,10 @@ class TestLockoutDuration:
                 pass
 
         # Lockout entry should exist
-        assert client_id in rate_limiter.lockouts
+        assert client_id in rate_limiter.backend.lockouts
 
         # Lockout expiry should be ~15 minutes from now
-        lockout_until = rate_limiter.lockouts[client_id]
+        lockout_until = rate_limiter.backend.lockouts[client_id]
         expected_time = datetime.now(timezone.utc) + timedelta(minutes=15)
 
         # Allow 5 second tolerance
@@ -195,7 +195,7 @@ class TestWindowExpiry:
         # Only recent attempts should remain
         # (Old ones outside 5-minute window should be cleaned)
         recent_attempts = [
-            ts for ts in rate_limiter.attempts[client_id]
+            ts for ts in rate_limiter.backend.attempts[client_id]
             if datetime.now(timezone.utc) - ts < timedelta(minutes=5)
         ]
 
@@ -245,7 +245,7 @@ class TestPerClientIsolation:
             rate_limiter.record_attempt(client_id)
 
             # All should still be under limit
-            assert len(rate_limiter.attempts[client_id]) == 5
+            assert len(rate_limiter.backend.attempts[client_id]) == 5
 
 
 class TestResponseFormat:
@@ -333,7 +333,7 @@ class TestConfigurability:
             # Old attempts should be expired
             limiter.check_rate_limit(client_id)
             cleaned_attempts = [
-                ts for ts in limiter.attempts[client_id]
+                ts for ts in limiter.backend.attempts[client_id]
                 if future_time - ts < timedelta(minutes=2)
             ]
             assert len(cleaned_attempts) == 0
@@ -371,7 +371,7 @@ class TestEdgeCases:
         rate_limiter.check_rate_limit(client_id)
         rate_limiter.record_attempt(client_id)
 
-        assert len(rate_limiter.attempts[client_id]) == 1
+        assert len(rate_limiter.backend.attempts[client_id]) == 1
 
     def test_simultaneous_attempts(self, rate_limiter):
         """Rapid sequential attempts should all count"""
@@ -422,4 +422,4 @@ class TestEdgeCases:
         rate_limiter.check_rate_limit(client_id)
         rate_limiter.record_attempt(client_id)
 
-        assert client_id in rate_limiter.attempts
+        assert client_id in rate_limiter.backend.attempts
