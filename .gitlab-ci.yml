@@ -50,15 +50,16 @@ test:
 
 # ---------------------------------------------------------------------------
 # Docker Build (only on main and release branches)
+# Requires runner with Docker socket access or DinD support.
+# To enable: configure runner with volumes = ["/var/run/docker.sock:/var/run/docker.sock"]
+# or a runner with privileged DinD support.
 # ---------------------------------------------------------------------------
 docker-build:
   stage: build
+  tags:
+    - docker-build
   image: docker:24
-  services:
-    - docker:24-dind
   variables:
-    DOCKER_TLS_CERTDIR: ""
-    DOCKER_HOST: "tcp://docker:2375"
     IMAGE_TAG: "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG"
   before_script:
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
@@ -72,6 +73,6 @@ docker-build:
       fi
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
     - if: $CI_COMMIT_BRANCH =~ /^releases\//
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: manual
