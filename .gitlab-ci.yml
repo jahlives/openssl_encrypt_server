@@ -1,6 +1,7 @@
 default:
   tags:
     - amd64
+    - arm64
 
 stages:
   - lint
