@@ -38,8 +38,10 @@ test:
     - apt-get update && apt-get install -y libssl3 pkg-config && rm -rf /var/lib/apt/lists/*
     - pip install --no-cache-dir -r requirements.txt
     - pip install --no-cache-dir pytest pytest-asyncio httpx
+    # Create package symlink so 'from openssl_encrypt_server import ...' resolves
+    - ln -s "$CI_PROJECT_DIR" "$(dirname $CI_PROJECT_DIR)/openssl_encrypt_server"
   script:
-    - python -m pytest unittests/ -v --tb=short
+    - PYTHONPATH="$(dirname $CI_PROJECT_DIR)" python -m pytest unittests/ -v --tb=short
   artifacts:
     when: always
     reports:
