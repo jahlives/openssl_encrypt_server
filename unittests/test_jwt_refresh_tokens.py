@@ -396,3 +396,74 @@ class TestTokenStructure:
 
         # JTI should be different
         assert payload1['jti'] != payload2['jti']
+
+
+class TestTokenRevocation:
+    """Tests for token revocation mechanism"""
+
+    def test_revoked_token_rejected(self, token_auth):
+        """A revoked token must be rejected on verification."""
+        client_id = "test_client_123"
+        token, _ = token_auth.create_token(client_id, "access")
+
+        # Verify it works before revocation
+        payload = token_auth.verify_token(token)
+        assert payload.sub == client_id
+
+        # Revoke it
+        token_auth.revoke_token(payload.jti)
+
+        # Should now be rejected
+        with pytest.raises(HTTPException) as exc_info:
+            token_auth.verify_token(token)
+        assert exc_info.value.status_code == 401
+        assert "revoked" in exc_info.value.detail.lower()
+
+    def test_refresh_revokes_old_refresh_token(self, token_auth):
+        """Using a refresh token must invalidate it (prevent replay)."""
+        client_id = "test_client_123"
+        tokens = token_auth.create_token_pair(client_id)
+        refresh_token = tokens["refresh_token"]
+
+        # First refresh should succeed
+        result = token_auth.refresh_access_token(refresh_token)
+        assert "access_token" in result
+
+        # Replaying the same refresh token must fail
+        with pytest.raises(HTTPException) as exc_info:
+            token_auth.refresh_access_token(refresh_token)
+        assert exc_info.value.status_code == 401
+
+    def test_new_refresh_token_works_after_old_revoked(self, token_auth):
+        """The new refresh token from a refresh operation must work."""
+        client_id = "test_client_123"
+        tokens = token_auth.create_token_pair(client_id)
+
+        # Refresh once
+        result = token_auth.refresh_access_token(tokens["refresh_token"])
+        new_refresh = result["refresh_token"]
+
+        # New refresh token should work
+        result2 = token_auth.refresh_access_token(new_refresh)
+        assert result2["client_id"] == client_id
+
+    def test_revoke_does_not_affect_other_tokens(self, token_auth):
+        """Revoking one token must not affect other tokens."""
+        client_id = "test_client_123"
+        token1, _ = token_auth.create_token(client_id, "access")
+        token2, _ = token_auth.create_token(client_id, "access")
+
+        # Revoke token1
+        payload1 = token_auth.verify_token(token1)
+        token_auth.revoke_token(payload1.jti)
+
+        # token2 should still work
+        payload2 = token_auth.verify_token(token2)
+        assert payload2.sub == client_id
+
+    def test_is_token_revoked(self, token_auth):
+        """is_token_revoked should return correct status."""
+        jti = "test-jti-12345"
+        assert not token_auth.is_token_revoked(jti)
+        token_auth.revoke_token(jti)
+        assert token_auth.is_token_revoked(jti)

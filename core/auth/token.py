@@ -13,8 +13,9 @@ cannot be used for Telemetry endpoints and vice versa.
 
 import logging
 import secrets
+import threading
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional, Type
+from typing import Any, Callable, Optional, Set, Type
 
 import jwt
 from fastapi import HTTPException, Request, Security, status
@@ -78,6 +79,10 @@ class TokenAuth:
         self.enable_sliding_expiration = config.enable_sliding_expiration
         self.issuer = config.issuer
         self.client_model = client_model
+
+        # Token revocation store: set of revoked jti values
+        self._revoked_jtis: Set[str] = set()
+        self._revoked_lock = threading.Lock()
 
         logger.info(
             f"TokenAuth initialized for issuer: {self.issuer} "
@@ -153,9 +158,35 @@ class TokenAuth:
             "token_type": "Bearer"
         }
 
+    def revoke_token(self, jti: str) -> None:
+        """
+        Revoke a token by its jti (JWT ID).
+
+        Args:
+            jti: The unique token identifier to revoke
+        """
+        with self._revoked_lock:
+            self._revoked_jtis.add(jti)
+        logger.info(f"Revoked token jti: {jti}")
+
+    def is_token_revoked(self, jti: str) -> bool:
+        """
+        Check if a token has been revoked.
+
+        Args:
+            jti: The unique token identifier to check
+
+        Returns:
+            True if the token has been revoked
+        """
+        with self._revoked_lock:
+            return jti in self._revoked_jtis
+
     def verify_token(self, token: str) -> TokenPayload:
         """
         Verify and decode JWT token.
+
+        Checks signature, expiry, issuer, and revocation status.
 
         Args:
             token: JWT token string
@@ -164,7 +195,7 @@ class TokenAuth:
             TokenPayload: Decoded and validated payload
 
         Raises:
-            HTTPException: If token is invalid, expired, or wrong issuer
+            HTTPException: If token is invalid, expired, revoked, or wrong issuer
         """
         try:
             data = jwt.decode(
@@ -173,8 +204,21 @@ class TokenAuth:
                 algorithms=[self.algorithm],
                 issuer=self.issuer,  # Validates issuer claim
             )
-            return TokenPayload(**data)
+            payload = TokenPayload(**data)
 
+            # Check revocation status
+            if self.is_token_revoked(payload.jti):
+                logger.warning(f"Revoked token used: jti={payload.jti}")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token has been revoked",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
+            return payload
+
+        except HTTPException:
+            raise  # Re-raise our own exceptions
         except jwt.ExpiredSignatureError:
             logger.warning("Token expired")
             raise HTTPException(
@@ -194,7 +238,7 @@ class TokenAuth:
             logger.warning(f"Invalid token: {e}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid token: {str(e)}",
+                detail="Invalid or malformed token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
@@ -232,6 +276,9 @@ class TokenAuth:
                 detail="Invalid token type. Refresh token required.",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
+        # Revoke the old refresh token to prevent replay
+        self.revoke_token(payload.jti)
 
         # Create new token pair (sliding expiration)
         new_tokens = self.create_token_pair(payload.sub)
