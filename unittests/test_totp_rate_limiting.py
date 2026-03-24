@@ -180,7 +180,7 @@ class TestWindowExpiry:
             # 3 old attempts (7 minutes ago)
             old_time = datetime.now(timezone.utc) - timedelta(minutes=7)
             mock_datetime.now.return_value = old_time
-            mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw) if args else future_time
+            mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw) if args else old_time
 
             for i in range(3):
                 rate_limiter.record_attempt(client_id)

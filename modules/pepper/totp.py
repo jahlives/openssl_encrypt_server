@@ -15,7 +15,7 @@ SECURITY:
 - 30-second time window for TOTP codes
 """
 
-import base64
+import abc
 import io
 import logging
 import secrets
@@ -38,9 +38,6 @@ from .models import PPClient, PPTOTPBackupCode
 
 logger = logging.getLogger(__name__)
 security_logger = get_security_logger()
-
-
-import abc
 
 
 class RateLimitBackend(abc.ABC):

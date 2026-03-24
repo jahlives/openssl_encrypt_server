@@ -8,7 +8,7 @@ Table prefix: in_ (integrity)
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import INET, JSON, UUID
 
 from ...core.database import Base

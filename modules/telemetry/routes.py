@@ -10,7 +10,7 @@ Endpoints:
 
 import logging
 
-from fastapi import APIRouter, Body, Depends, Query, Request, Security, status
+from fastapi import APIRouter, Body, Depends, Request, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from slowapi import Limiter

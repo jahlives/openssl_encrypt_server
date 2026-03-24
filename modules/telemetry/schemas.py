@@ -5,7 +5,6 @@ Telemetry Pydantic Schemas
 Request/response validation for telemetry endpoints.
 """
 
-from datetime import datetime
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field

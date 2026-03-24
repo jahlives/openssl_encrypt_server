@@ -7,7 +7,6 @@ Table prefix: ks_ (keyserver)
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSON, UUID

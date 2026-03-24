@@ -5,9 +5,7 @@ Unit tests for CORS configuration.
 Tests secure CORS settings with explicit origin control.
 """
 
-import pytest
 from unittest.mock import patch
-import logging
 
 
 class TestCORSConfiguration:
@@ -120,14 +118,14 @@ class TestCORSConfiguration:
         from openssl_encrypt_server.config import Settings
 
         settings = Settings()
-        assert settings.cors_allow_credentials == False
+        assert not settings.cors_allow_credentials
 
     def test_cors_credentials_can_be_enabled(self):
         """CORS credentials can be explicitly enabled"""
         from openssl_encrypt_server.config import Settings
 
         settings = Settings(cors_allow_credentials=True)
-        assert settings.cors_allow_credentials == True
+        assert settings.cors_allow_credentials
 
     def test_cors_max_age_default(self):
         """CORS max age should default to 600 seconds"""
@@ -183,7 +181,7 @@ class TestCORSMiddleware:
         )
 
         assert len(settings.get_cors_origins_list()) == 2
-        assert settings.cors_allow_credentials == True
+        assert settings.cors_allow_credentials
         assert len(settings.get_cors_methods_list()) == 3
         assert len(settings.get_cors_headers_list()) == 2
         assert settings.cors_max_age == 1800
@@ -204,7 +202,7 @@ class TestCORSSecureDefaults:
         from openssl_encrypt_server.config import Settings
 
         settings = Settings()
-        assert settings.cors_allow_credentials == False
+        assert not settings.cors_allow_credentials
 
     def test_default_methods_restrictive(self):
         """Default methods should be restrictive"""

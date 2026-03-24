@@ -14,7 +14,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from ...core.database import get_db
-from .auth import get_client_info, require_integrity_auth
+from .auth import require_integrity_auth
 from .schemas import (
     BatchVerifyRequest,
     BatchVerifyResponse,

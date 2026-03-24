@@ -9,7 +9,7 @@ Uses the same ProxyAuth/MTLSAuth handlers as the pepper module.
 import logging
 from typing import Optional
 
-from fastapi import Depends, Request
+from fastapi import Request
 
 from ...core.auth.mtls import MTLSAuth
 from ...core.auth.proxy import ProxyAuth

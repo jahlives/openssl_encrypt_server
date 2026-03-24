@@ -3,7 +3,7 @@
 Custom exception handlers for the server.
 """
 
-from fastapi import HTTPException, Request, status
+from fastapi import Request, status
 from fastapi.responses import JSONResponse
 
 

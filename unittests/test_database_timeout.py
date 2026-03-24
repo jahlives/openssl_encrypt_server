@@ -6,8 +6,7 @@ Tests that query timeout is properly configured to prevent DoS attacks
 from slow queries.
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock, call
+from unittest.mock import Mock, patch
 
 
 class TestDatabaseTimeoutConfiguration:
@@ -140,7 +139,7 @@ class TestDatabaseTimeoutConfiguration:
             init_engine("postgresql+asyncpg://user:pass@localhost/db")
 
             call_kwargs = mock_create.call_args[1]
-            assert call_kwargs['pool_pre_ping'] == True
+            assert call_kwargs['pool_pre_ping']
 
 
 class TestSettingsIntegration:

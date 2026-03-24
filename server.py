@@ -9,13 +9,13 @@ import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from .config import Settings, settings, validate_config
+from .config import settings, validate_config
 from .core.database import close_db, init_db, init_engine
 from .core.exceptions import ServerException, server_exception_handler
 from .modules import load_modules
@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
 
     # Check if liboqs is available
     try:
-        import oqs
+        import oqs  # noqa: F401
 
         logger.info("liboqs is available - PQC signature verification enabled")
     except ImportError:

@@ -169,7 +169,7 @@ class KeyserverService:
                     KSKey.email == query,
                 )
             )
-            .where(KSKey.revoked == False)
+            .where(not KSKey.revoked)
             .order_by(KSKey.created_at.desc())
         )
 

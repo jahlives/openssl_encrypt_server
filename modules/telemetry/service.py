@@ -120,7 +120,7 @@ class TelemetryService:
         operations = {op: count for op, count in result.all() if op}
 
         # Success rate
-        stmt = select(func.count(TMEvent.id)).where(TMEvent.success == True)
+        stmt = select(func.count(TMEvent.id)).where(TMEvent.success)
         result = await self.db.execute(stmt)
         successful = result.scalar() or 0
 

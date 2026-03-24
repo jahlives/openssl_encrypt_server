@@ -8,7 +8,7 @@ token type validation, and security boundaries.
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import jwt
 
 from openssl_encrypt_server.core.auth.token import TokenAuth, TokenConfig
