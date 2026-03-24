@@ -385,10 +385,15 @@ async def update_pepper(
     body: PepperUpdateRequest,
     cert_fingerprint: str = Depends(require_pepper_auth),
     db: AsyncSession = Depends(get_db),
+    x_totp_code: Optional[str] = Header(None, alias="X-TOTP-Code"),
 ):
     """
     Update pepper (encrypted blob and/or description).
+
+    Requires TOTP code if 2FA enabled (security-sensitive operation).
     """
+    await verify_totp_if_enabled(cert_fingerprint, x_totp_code, db)
+
     service = PepperService(db, settings.get_pepper_config())
     client = await service.get_or_create_client(cert_fingerprint)
 
@@ -409,10 +414,15 @@ async def delete_pepper(
     name: str,
     cert_fingerprint: str = Depends(require_pepper_auth),
     db: AsyncSession = Depends(get_db),
+    x_totp_code: Optional[str] = Header(None, alias="X-TOTP-Code"),
 ):
     """
     Delete specific pepper.
+
+    Requires TOTP code if 2FA enabled (destructive operation).
     """
+    await verify_totp_if_enabled(cert_fingerprint, x_totp_code, db)
+
     service = PepperService(db, settings.get_pepper_config())
     client = await service.get_or_create_client(cert_fingerprint)
 
