@@ -215,6 +215,12 @@ class Settings(BaseSettings):
         default=None, validation_alias="REGISTRATION_SECRET"
     )
 
+    # SECURITY: Explicit opt-in to bypass security validation for local development ONLY.
+    # This is separate from debug mode to prevent accidental security bypasses.
+    allow_insecure_defaults: bool = Field(
+        default=False, validation_alias="ALLOW_INSECURE_DEFAULTS"
+    )
+
     def get_cors_origins_list(self) -> List[str]:
         """
         Parse CORS origins string into list.
@@ -360,16 +366,17 @@ def validate_config(settings: Settings):
         if len(ks_secret) < 32:
             raise ValueError("KEYSERVER_TOKEN_SECRET must be at least 32 characters long")
         if _is_insecure_default(ks_secret):
-            if not settings.debug:
+            if settings.allow_insecure_defaults:
+                logger.warning(
+                    "SECURITY WARNING: KEYSERVER_TOKEN_SECRET uses a default value. "
+                    "ALLOW_INSECURE_DEFAULTS is set - only acceptable for local development."
+                )
+            else:
                 raise ValueError(
                     "SECURITY ERROR: KEYSERVER_TOKEN_SECRET contains a default/insecure value. "
                     "Set a proper secret via environment variable. "
                     'Generate with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
                 )
-            logger.warning(
-                "SECURITY WARNING: KEYSERVER_TOKEN_SECRET uses a default value. "
-                "This is only acceptable in debug mode."
-            )
         secrets.append(("Keyserver", ks_secret))
 
     if settings.telemetry_enabled:
@@ -382,16 +389,17 @@ def validate_config(settings: Settings):
         if len(tm_secret) < 32:
             raise ValueError("TELEMETRY_TOKEN_SECRET must be at least 32 characters long")
         if _is_insecure_default(tm_secret):
-            if not settings.debug:
+            if settings.allow_insecure_defaults:
+                logger.warning(
+                    "SECURITY WARNING: TELEMETRY_TOKEN_SECRET uses a default value. "
+                    "ALLOW_INSECURE_DEFAULTS is set - only acceptable for local development."
+                )
+            else:
                 raise ValueError(
                     "SECURITY ERROR: TELEMETRY_TOKEN_SECRET contains a default/insecure value. "
                     "Set a proper secret via environment variable. "
                     'Generate with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
                 )
-            logger.warning(
-                "SECURITY WARNING: TELEMETRY_TOKEN_SECRET uses a default value. "
-                "This is only acceptable in debug mode."
-            )
         secrets.append(("Telemetry", tm_secret))
 
     # Check all secrets are unique
@@ -415,10 +423,10 @@ def validate_config(settings: Settings):
     }
 
     if not settings.postgres_password:
-        if settings.debug:
+        if settings.allow_insecure_defaults:
             logger.warning(
                 "SECURITY WARNING: POSTGRES_PASSWORD is empty. "
-                "Set POSTGRES_PASSWORD in environment for production."
+                "ALLOW_INSECURE_DEFAULTS is set - only acceptable for local development."
             )
         else:
             raise ValueError(
@@ -426,10 +434,10 @@ def validate_config(settings: Settings):
                 "Set a strong password for the database."
             )
     elif any(marker in settings.postgres_password.lower() for marker in _insecure_markers):
-        if settings.debug:
+        if settings.allow_insecure_defaults:
             logger.warning(
                 "SECURITY WARNING: POSTGRES_PASSWORD contains a default/insecure value. "
-                "Change it before deploying to production."
+                "ALLOW_INSECURE_DEFAULTS is set - only acceptable for local development."
             )
         else:
             raise ValueError(
