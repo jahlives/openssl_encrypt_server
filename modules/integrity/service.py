@@ -5,6 +5,7 @@ Integrity Service Layer
 Business logic for integrity verification operations.
 """
 
+import hmac
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -417,8 +418,8 @@ class IntegrityService:
                 warning="Hash not found for this file. Store a hash first with POST /hashes.",
             )
 
-        # Compare hashes
-        match = hash_record.metadata_hash == request.metadata_hash
+        # Compare hashes (constant-time to prevent timing attacks)
+        match = hmac.compare_digest(hash_record.metadata_hash, request.metadata_hash)
 
         # Update verification stats
         hash_record.verification_count += 1
