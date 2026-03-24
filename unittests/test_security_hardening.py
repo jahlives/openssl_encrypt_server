@@ -140,6 +140,49 @@ class TestSearchQueryFilter(unittest.TestCase):
         )
 
 
+class TestRegistrationGating(unittest.TestCase):
+    """Fix 6: Registration must check REGISTRATION_SECRET when configured."""
+
+    def test_keyserver_register_has_secret_header(self):
+        """Keyserver register endpoint must accept X-Registration-Secret."""
+        import inspect
+        from openssl_encrypt_server.modules.keyserver.routes import register
+        sig = inspect.signature(register)
+        self.assertIn("x_registration_secret", sig.parameters,
+                       "register must accept X-Registration-Secret header")
+
+    def test_telemetry_register_has_secret_header(self):
+        """Telemetry register endpoint must accept X-Registration-Secret."""
+        import inspect
+        from openssl_encrypt_server.modules.telemetry.routes import register
+        sig = inspect.signature(register)
+        self.assertIn("x_registration_secret", sig.parameters,
+                       "register must accept X-Registration-Secret header")
+
+    def test_keyserver_register_checks_secret(self):
+        """Keyserver register must check registration_secret from config."""
+        import inspect
+        from openssl_encrypt_server.modules.keyserver.routes import register
+        source = inspect.getsource(register)
+        self.assertIn("registration_secret", source,
+                       "register must check registration_secret")
+
+    def test_telemetry_register_checks_secret(self):
+        """Telemetry register must check registration_secret from config."""
+        import inspect
+        from openssl_encrypt_server.modules.telemetry.routes import register
+        source = inspect.getsource(register)
+        self.assertIn("registration_secret", source,
+                       "register must check registration_secret")
+
+    def test_settings_has_registration_secret_field(self):
+        """Settings must include registration_secret field."""
+        from openssl_encrypt_server.config import Settings
+        fields = Settings.model_fields
+        self.assertIn("registration_secret", fields,
+                       "Settings must have registration_secret field")
+
+
 class TestGenericErrorMessages(unittest.TestCase):
     """Fix 7: Error responses must not leak internal details."""
 

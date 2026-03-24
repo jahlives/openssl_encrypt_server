@@ -10,13 +10,14 @@ Endpoints:
 
 import logging
 
-from fastapi import APIRouter, Body, Depends, Request, Security, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...config import settings
 from ...core.database import get_db
 from .auth import get_telemetry_auth
 from .schemas import (
@@ -63,16 +64,29 @@ async def get_current_client(
     summary="Register new telemetry client",
 )
 @limiter.limit("10/hour")
-async def register(request: Request):
+async def register(
+    request: Request,
+    x_registration_secret: str | None = Header(None, alias="X-Registration-Secret"),
+):
     """
     Register a new Telemetry client.
 
     Returns a JWT token that can ONLY be used for Telemetry endpoints.
     The token includes an issuer claim that prevents cross-module usage.
 
+    If REGISTRATION_SECRET is configured, the X-Registration-Secret header
+    must match to complete registration.
+
     Returns:
         RegisterResponse: Client ID, JWT token, expiration
     """
+    if settings.registration_secret:
+        if not x_registration_secret or x_registration_secret != settings.registration_secret:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Invalid or missing registration secret",
+            )
+
     auth = get_telemetry_auth()
     return await auth.register_client()
 

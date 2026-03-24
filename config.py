@@ -210,6 +210,11 @@ class Settings(BaseSettings):
         default="/certs/client-ca.crt", validation_alias="INTEGRITY_MTLS_CLIENT_CA"
     )
 
+    # Registration gating: when set, clients must provide this secret to register
+    registration_secret: Optional[str] = Field(
+        default=None, validation_alias="REGISTRATION_SECRET"
+    )
+
     def get_cors_origins_list(self) -> List[str]:
         """
         Parse CORS origins string into list.
