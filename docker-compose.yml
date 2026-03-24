@@ -18,7 +18,7 @@ services:
         ipv4_address: 172.28.0.2
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-openssl_server}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: ${POSTGRES_DB:-openssl_encrypt}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -42,7 +42,7 @@ services:
     environment:
       # Database
       POSTGRES_USER: ${POSTGRES_USER:-openssl_server}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: ${POSTGRES_DB:-openssl_encrypt}
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
@@ -54,8 +54,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
       # Auth Secrets
-      KEYSERVER_TOKEN_SECRET: ${KEYSERVER_TOKEN_SECRET:-keyserver-secret-min-32-chars-CHANGE-ME}
-      TELEMETRY_TOKEN_SECRET: ${TELEMETRY_TOKEN_SECRET:-telemetry-secret-min-32-chars-CHANGE-ME}
+      KEYSERVER_TOKEN_SECRET: ${KEYSERVER_TOKEN_SECRET:?KEYSERVER_TOKEN_SECRET must be set (min 32 chars)}
+      TELEMETRY_TOKEN_SECRET: ${TELEMETRY_TOKEN_SECRET:?TELEMETRY_TOKEN_SECRET must be set (min 32 chars)}
 
       # Modules
       KEYSERVER_ENABLED: ${KEYSERVER_ENABLED:-true}
@@ -72,7 +72,7 @@ services:
       INTEGRITY_AUTH_MODE: ${INTEGRITY_AUTH_MODE:-proxy}
 
       # CORS
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
     depends_on:
       db:
         condition: service_healthy
