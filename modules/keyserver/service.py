@@ -63,7 +63,7 @@ class KeyserverService:
         except Exception as e:
             logger.error(f"Unexpected verification error: {e}")
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=f"Verification failed: {e}"
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Verification failed"
             )
 
         # Check if key already exists

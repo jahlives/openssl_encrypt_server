@@ -275,7 +275,7 @@ class ProxyAuth:
                 logger.error(f"Failed to compute fingerprint from certificate: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=f"Invalid client certificate: {e}"
+                    detail="Invalid client certificate"
                 )
 
         # Fall back to pre-computed fingerprint header
@@ -296,7 +296,7 @@ class ProxyAuth:
             logger.error(f"Invalid fingerprint format: {e}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid certificate fingerprint: {e}"
+                detail="Invalid certificate fingerprint"
             )
 
     async def get_client_dn(self, request: Request) -> Optional[str]:
