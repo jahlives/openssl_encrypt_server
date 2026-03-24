@@ -13,6 +13,7 @@ Usage:
 import asyncio
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -118,14 +119,23 @@ def main():
     parser = argparse.ArgumentParser(description="Run fingerprint column migration")
     parser.add_argument(
         "--database-url",
-        required=True,
-        help="PostgreSQL connection URL (asyncpg format: postgresql+asyncpg://user:pass@host/db)",
+        required=False,
+        default=None,
+        help="PostgreSQL connection URL (prefer DATABASE_URL env var to avoid exposing credentials in process table)",
     )
 
     args = parser.parse_args()
 
+    # Prefer environment variable over CLI argument to avoid credential exposure
+    database_url = os.environ.get("DATABASE_URL") or args.database_url
+    if not database_url:
+        parser.error(
+            "Database URL required. Set DATABASE_URL environment variable "
+            "or use --database-url (not recommended: credentials visible in process table)"
+        )
+
     # Run migration
-    asyncio.run(run_migration(args.database_url))
+    asyncio.run(run_migration(database_url))
 
 
 if __name__ == "__main__":
