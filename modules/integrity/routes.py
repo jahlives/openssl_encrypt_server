@@ -42,6 +42,7 @@ limiter = Limiter(key_func=get_remote_address)
 @limiter.limit("60/minute")
 @router.get("/profile", response_model=ProfileResponse)
 async def get_profile(
+    request: Request,
     cert_fingerprint: str = Depends(require_integrity_auth),
     db: AsyncSession = Depends(get_db),
 ):
