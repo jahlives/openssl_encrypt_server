@@ -29,6 +29,7 @@ from .schemas import (
     EmailRegisterRequest,
     EmailRegisterResponse,
     ErrorResponse,
+    KeyListSearchResponse,
     KeySearchResponse,
     KeyUploadResponse,
     KeyUploadWithPoP,
@@ -43,7 +44,7 @@ from .service import KeyserverService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/keys", tags=["keyserver"])
+router = APIRouter(tags=["keyserver"])
 
 security = HTTPBearer()
 
@@ -568,7 +569,7 @@ async def upload_key(
 
 @router.get(
     "/search",
-    response_model=KeySearchResponse,
+    response_model=KeyListSearchResponse,
     status_code=status.HTTP_200_OK,
     responses={404: {"model": ErrorResponse, "description": "Key not found"}},
     summary="Search for public key",
@@ -601,6 +602,37 @@ async def search_key(
     service = KeyserverService(db)
     ip_address = request.client.host if request.client else None
     return await service.search_key(q, None, ip_address)
+
+
+@router.get(
+    "/{fingerprint}",
+    response_model=KeySearchResponse,
+    status_code=status.HTTP_200_OK,
+    responses={404: {"model": ErrorResponse, "description": "Key not found"}},
+    summary="Get public key by fingerprint",
+)
+@limiter.limit("100/minute")
+async def get_key_by_fingerprint(
+    request: Request,
+    fingerprint: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Fetch a public key by exact fingerprint.
+
+    PUBLIC ENDPOINT: No authentication required.
+
+    Args:
+        fingerprint: Exact fingerprint string
+        request: FastAPI request
+        db: Database session
+
+    Returns:
+        KeySearchResponse: Key bundle if found
+    """
+    service = KeyserverService(db)
+    ip_address = request.client.host if request.client else None
+    return await service.get_key_by_fingerprint(fingerprint, None, ip_address)
 
 
 @router.post(

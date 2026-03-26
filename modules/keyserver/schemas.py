@@ -5,7 +5,7 @@ Keyserver Pydantic Schemas
 Request/response validation for keyserver endpoints.
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -79,6 +79,13 @@ class KeyUploadResponse(BaseModel):
     success: bool = True
     fingerprint: str
     message: str = "Key uploaded successfully"
+
+
+class KeyListSearchResponse(BaseModel):
+    """Response for key list search (email/name/fingerprint prefix)"""
+
+    keys: List[KeyBundleSchema]
+    count: int
 
 
 class KeySearchResponse(BaseModel):

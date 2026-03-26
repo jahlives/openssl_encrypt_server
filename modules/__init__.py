@@ -35,7 +35,7 @@ def load_modules(app: FastAPI, settings) -> list[str]:
             ks_auth.init_keyserver_auth(settings.get_keyserver_config())
 
             # Include router
-            app.include_router(ks_routes.router)
+            app.include_router(ks_routes.router, prefix="/api/v1/keys")
 
             loaded.append("keyserver")
             logger.info("Keyserver module loaded")

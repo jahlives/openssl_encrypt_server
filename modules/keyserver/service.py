@@ -349,23 +349,64 @@ class KeyserverService:
         )
 
         result = await self.db.execute(stmt)
-        key = result.scalars().first()
+        keys = result.scalars().all()
 
-        if not key:
+        if len(keys) == 0:
             logger.info(f"Key not found for query: '{query}'")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Key not found"
             )
 
-        # Parse bundle JSON
-        bundle_data = json.loads(key.bundle_json)
+        # Log access for each key found
+        for key in keys:
+            await self._log_access(key.fingerprint, "search", client_id, ip_address)
+
+        logger.info(f"Found {len(keys)} key(s) for query: '{query}'")
+
+        return {
+            "keys": [KeyBundleSchema(**json.loads(k.bundle_json)) for k in keys],
+            "count": len(keys),
+        }
+
+    async def get_key_by_fingerprint(
+        self, fingerprint: str, client_id: Optional[str] = None, ip_address: Optional[str] = None
+    ) -> dict:
+        """
+        Fetch public key by exact fingerprint.
+
+        Args:
+            fingerprint: Exact fingerprint to look up
+            client_id: Optional client ID
+            ip_address: Optional client IP
+
+        Returns:
+            dict: Response with single key bundle
+
+        Raises:
+            HTTPException: If key not found
+        """
+        logger.info(f"Fingerprint lookup for: '{fingerprint}'")
+
+        stmt = (
+            select(KSKey)
+            .where(KSKey.fingerprint == fingerprint, KSKey.revoked.is_(False))
+        )
+
+        result = await self.db.execute(stmt)
+        key = result.scalar_one_or_none()
+
+        if not key:
+            logger.info(f"Key not found for fingerprint: '{fingerprint}'")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Key not found"
+            )
 
         # Log access
         await self._log_access(key.fingerprint, "search", client_id, ip_address)
 
         logger.info(f"Key found: {key.name} (fp: {key.fingerprint[:20]}...)")
 
-        return {"key": KeyBundleSchema(**bundle_data), "message": "Key found"}
+        return {"key": KeyBundleSchema(**json.loads(key.bundle_json)), "message": "Key found"}
 
     async def revoke_key(
         self,
