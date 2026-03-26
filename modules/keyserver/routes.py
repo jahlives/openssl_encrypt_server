@@ -137,6 +137,7 @@ async def register_email(
         smtp_username=settings.smtp_username,
         smtp_password=settings.smtp_password,
         smtp_use_tls=settings.smtp_use_tls,
+        smtp_verify_tls=settings.smtp_verify_tls,
         from_address=settings.smtp_from_address,
     )
 
@@ -188,6 +189,7 @@ async def confirm_registration(
         smtp_username=settings.smtp_username,
         smtp_password=settings.smtp_password,
         smtp_use_tls=settings.smtp_use_tls,
+        smtp_verify_tls=settings.smtp_verify_tls,
         from_address=settings.smtp_from_address,
     )
 

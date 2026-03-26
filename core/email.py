@@ -6,6 +6,7 @@ Uses aiosmtplib for non-blocking SMTP communication.
 """
 
 import logging
+import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
@@ -30,6 +31,7 @@ class EmailService:
         smtp_username: Optional[str] = None,
         smtp_password: Optional[str] = None,
         smtp_use_tls: bool = True,
+        smtp_verify_tls: bool = True,
         from_address: str = "noreply@example.com",
     ):
         self.smtp_host = smtp_host
@@ -37,6 +39,7 @@ class EmailService:
         self.smtp_username = smtp_username
         self.smtp_password = smtp_password
         self.smtp_use_tls = smtp_use_tls
+        self.smtp_verify_tls = smtp_verify_tls
         self.from_address = from_address
 
     async def _send_email(self, to: str, subject: str, body_html: str) -> None:
@@ -59,6 +62,11 @@ class EmailService:
             "port": self.smtp_port,
             "start_tls": self.smtp_use_tls,
         }
+        if self.smtp_use_tls and not self.smtp_verify_tls:
+            tls_context = ssl.create_default_context()
+            tls_context.check_hostname = False
+            tls_context.verify_mode = ssl.CERT_NONE
+            kwargs["tls_context"] = tls_context
         if self.smtp_username and self.smtp_password:
             kwargs["username"] = self.smtp_username
             kwargs["password"] = self.smtp_password

@@ -229,6 +229,7 @@ class Settings(BaseSettings):
     smtp_username: Optional[str] = Field(default=None, validation_alias="SMTP_USERNAME")
     smtp_password: Optional[str] = Field(default=None, validation_alias="SMTP_PASSWORD")
     smtp_use_tls: bool = Field(default=True, validation_alias="SMTP_USE_TLS")
+    smtp_verify_tls: bool = Field(default=True, validation_alias="SMTP_VERIFY_TLS")
     smtp_from_address: str = Field(default="", validation_alias="SMTP_FROM_ADDRESS")
 
     # SECURITY: Explicit opt-in to bypass security validation for local development ONLY.
