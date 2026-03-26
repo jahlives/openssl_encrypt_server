@@ -222,6 +222,9 @@ class Settings(BaseSettings):
     keyserver_base_url: str = Field(
         default="", validation_alias="KEYSERVER_BASE_URL"
     )
+    keyserver_challenge_ttl_minutes: int = Field(
+        default=10, validation_alias="KEYSERVER_CHALLENGE_TTL_MINUTES"
+    )
 
     # SMTP configuration for email sending
     smtp_host: str = Field(default="", validation_alias="SMTP_HOST")

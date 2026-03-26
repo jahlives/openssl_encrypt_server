@@ -86,6 +86,33 @@ class KSKey(Base):
         return f"<KSKey(fingerprint={self.fingerprint[:20]}..., name={self.name})>"
 
 
+class KSChallenge(Base):
+    """
+    Single-use Proof of Possession challenge for key upload.
+
+    Lifecycle: created (used=False) → consumed (used=True) → cleaned up.
+    Challenges are single-use and expire after KEYSERVER_CHALLENGE_TTL_MINUTES.
+    The nonce is UNIQUE to prevent any collision from being exploitable.
+    """
+
+    __tablename__ = "ks_challenges"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    nonce = Column(String(64), unique=True, nullable=False)  # 32-byte hex = 64 chars
+    client_id = Column(String(64), nullable=False, index=True)
+    fingerprint_hint = Column(String(100), nullable=True)  # For logging only — NOT validated
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    used = Column(Boolean, nullable=False, default=False)
+
+    def __repr__(self):
+        return f"<KSChallenge(id={self.id}, client_id={self.client_id[:8]}..., used={self.used})>"
+
+
 class KSAccessLog(Base):
     """
     Access log for keyserver operations.

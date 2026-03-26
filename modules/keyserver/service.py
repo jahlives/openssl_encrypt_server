@@ -9,19 +9,21 @@ import hmac
 import json
 import logging
 import secrets
+import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, or_, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import KSAccessLog, KSClient, KSKey, KSPendingRegistration
-from .schemas import KeyBundleSchema, RevocationRequest
+from .models import KSAccessLog, KSChallenge, KSClient, KSKey, KSPendingRegistration
+from .schemas import KeyBundleSchema, KeyUploadWithPoP, RevocationRequest
 from .verification import (
     FingerprintMismatchError,
     VerificationError,
     verify_bundle_signature,
+    verify_pop_signature,
     verify_revocation_signature,
 )
 
@@ -54,30 +56,160 @@ class KeyserverService:
 
         return None
 
-    async def upload_key(
-        self, client_id: str, bundle: KeyBundleSchema, ip_address: Optional[str] = None
+    async def generate_challenge(
+        self,
+        client_id: str,
+        fingerprint_hint: Optional[str] = None,
+        ttl_minutes: int = 10,
     ) -> dict:
         """
-        Upload public key bundle.
+        Generate a single-use Proof of Possession challenge for key upload.
+
+        Args:
+            client_id:        Authenticated client requesting the challenge.
+            fingerprint_hint: Optional fingerprint for operator logging (not validated).
+            ttl_minutes:      Challenge lifetime in minutes (default: 10).
+
+        Returns:
+            dict with challenge_id (str), nonce (str), expires_at (ISO 8601 str).
+        """
+        # Lazy cleanup: prune expired/used challenges before issuing a new one
+        try:
+            await self.cleanup_expired_challenges()
+        except Exception:
+            pass  # Never block challenge issuance on cleanup failure
+
+        nonce = secrets.token_hex(32)  # 32 bytes → 64 hex chars
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(minutes=ttl_minutes)
+
+        challenge = KSChallenge(
+            nonce=nonce,
+            client_id=client_id,
+            fingerprint_hint=fingerprint_hint,
+            expires_at=expires_at,
+        )
+        self.db.add(challenge)
+        await self.db.commit()
+        await self.db.refresh(challenge)  # Populate server-generated UUID
+
+        logger.info(
+            f"Challenge issued to client {client_id[:8]}... "
+            f"(id: {challenge.id}, hint: {fingerprint_hint or 'none'})"
+        )
+
+        return {
+            "challenge_id": str(challenge.id),
+            "nonce": nonce,
+            "expires_at": expires_at.isoformat(),
+        }
+
+    async def cleanup_expired_challenges(self) -> int:
+        """
+        Delete expired and used challenges to prevent unbounded table growth.
+
+        Retains unexpired, unused challenges so in-flight uploads are unaffected.
+
+        Returns:
+            int: Number of records deleted.
+        """
+        now = datetime.now(timezone.utc)
+        stmt = delete(KSChallenge).where(
+            or_(
+                KSChallenge.expires_at < now,   # All expired (used or not)
+                KSChallenge.used.is_(True),      # All used (even if not yet expired)
+            )
+        )
+        result = await self.db.execute(stmt)
+        await self.db.commit()
+
+        count = result.rowcount
+        if count > 0:
+            logger.info(f"Cleaned up {count} expired/used challenges")
+        return count
+
+    async def upload_key(
+        self, client_id: str, bundle: KeyUploadWithPoP, ip_address: Optional[str] = None
+    ) -> dict:
+        """
+        Upload public key bundle with Proof of Possession verification.
+
+        Two-step PoP flow:
+        1. Client must first call POST /challenge to obtain a nonce.
+        2. Client signs b"POP:" + nonce + b":" + fingerprint with ML-DSA private key.
+        3. challenge_id + pop_signature are submitted alongside the key bundle.
 
         Args:
             client_id: Client identifier
-            bundle: Public key bundle
+            bundle: Public key bundle with PoP fields
             ip_address: Client IP address (optional)
 
         Returns:
             dict: Upload response
 
         Raises:
-            HTTPException: If verification fails or key exists
+            HTTPException: If PoP/bundle verification fails or key exists
         """
         logger.info(
             f"Upload request from client {client_id[:8]}... for key '{bundle.name}' (fp: {bundle.fingerprint[:20]}...)"
         )
 
-        # Verify bundle signature and fingerprint
+        # --- Step 1: Validate challenge_id format ---
         try:
-            bundle_dict = bundle.model_dump()
+            challenge_uuid = _uuid.UUID(bundle.challenge_id)
+        except (ValueError, AttributeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid challenge_id format",
+            )
+
+        # --- Step 2: Atomic challenge consumption (TOCTOU-safe) ---
+        # A single UPDATE...WHERE...RETURNING atomically verifies the challenge
+        # is valid (not expired, not used, correct client) and marks it used.
+        # If nothing matches, the challenge was not found / expired / used /
+        # owned by a different client — all return the same generic 400.
+        now = datetime.now(timezone.utc)
+        stmt = (
+            sa_update(KSChallenge)
+            .where(KSChallenge.id == challenge_uuid)
+            .where(KSChallenge.used.is_(False))
+            .where(KSChallenge.expires_at > now)
+            .where(KSChallenge.client_id == client_id)
+            .values(used=True)
+            .returning(KSChallenge.nonce)
+        )
+        result = await self.db.execute(stmt)
+        row = result.fetchone()
+
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Challenge not found, expired, or already used",
+            )
+
+        nonce = row[0]
+        await self.db.commit()
+
+        # --- Step 3: Verify Proof of Possession ---
+        try:
+            verify_pop_signature(
+                nonce_hex=nonce,
+                fingerprint=bundle.fingerprint,
+                pop_signature_b64=bundle.pop_signature,
+                signing_public_key_b64=bundle.signing_public_key,
+                signing_algorithm=bundle.signing_algorithm,
+            )
+        except (VerificationError, ValueError) as e:
+            logger.error(f"PoP verification failed for client {client_id[:8]}...: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Proof of Possession verification failed",
+            )
+
+        # --- Step 4: Verify bundle self-signature and fingerprint ---
+        # Exclude PoP-specific fields so they don't corrupt the reconstructed message.
+        try:
+            bundle_dict = bundle.model_dump(exclude={"challenge_id", "pop_signature"})
             verify_bundle_signature(bundle_dict)
         except (VerificationError, FingerprintMismatchError) as e:
             logger.error(f"Bundle verification failed: {e}")

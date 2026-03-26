@@ -22,6 +22,7 @@ try:
 
     LIBOQS_AVAILABLE = True
 except ImportError:
+    oqs = None  # type: ignore[assignment]  # Patched in tests; guarded by LIBOQS_AVAILABLE checks
     LIBOQS_AVAILABLE = False
     logger.warning("liboqs-python not available. Signature verification will fail.")
 
@@ -176,6 +177,76 @@ def calculate_fingerprint(key_data: bytes) -> str:
     fingerprint = ":".join(f"{b:02x}" for b in digest)
 
     return fingerprint
+
+
+def verify_pop_signature(
+    nonce_hex: str,
+    fingerprint: str,
+    pop_signature_b64: str,
+    signing_public_key_b64: str,
+    signing_algorithm: str,
+) -> bool:
+    """
+    Verify Proof-of-Possession signature for key upload.
+
+    The canonical message is:
+        b"POP:" + nonce_hex.encode("ascii") + b":" + fingerprint.encode("utf-8")
+
+    IMPORTANT: The nonce is encoded as its hex string representation (not raw bytes).
+    This choice is the protocol contract between server and client — both sides must
+    use the same encoding or verification will always fail.
+
+    Args:
+        nonce_hex:              64-char hex string nonce from KSChallenge.nonce
+        fingerprint:            Key fingerprint from the uploaded bundle
+        pop_signature_b64:      Base64-encoded ML-DSA signature
+        signing_public_key_b64: Base64-encoded signing public key from the bundle
+        signing_algorithm:      ML-DSA variant string (e.g., "ML-DSA-65")
+
+    Returns:
+        True if the PoP signature is valid.
+
+    Raises:
+        VerificationError: If signature verification fails or liboqs unavailable
+        ValueError: If algorithm is unsupported
+    """
+    if not LIBOQS_AVAILABLE:
+        raise VerificationError("liboqs not available - cannot verify PoP signature")
+
+    algo_map = {
+        "ML-DSA-44": "Dilithium2",
+        "ML-DSA-65": "Dilithium3",
+        "ML-DSA-87": "Dilithium5",
+    }
+
+    if signing_algorithm not in algo_map:
+        raise ValueError(f"Unsupported signing algorithm: {signing_algorithm}")
+
+    liboqs_algo = algo_map[signing_algorithm]
+
+    try:
+        verifier = oqs.Signature(liboqs_algo)
+
+        # Canonical message — MUST match client-side construction exactly.
+        # Uses hex string encoding of nonce (not raw bytes).
+        message = b"POP:" + nonce_hex.encode("ascii") + b":" + fingerprint.encode("utf-8")
+
+        signature_bytes = base64.b64decode(pop_signature_b64)
+        public_key_bytes = base64.b64decode(signing_public_key_b64)
+
+        is_valid = verifier.verify(message, signature_bytes, public_key_bytes)
+
+        if not is_valid:
+            raise VerificationError("PoP signature verification failed")
+
+        logger.debug(f"PoP signature verified for fingerprint {fingerprint[:20]}...")
+        return True
+
+    except VerificationError:
+        raise
+    except Exception as e:
+        logger.error(f"PoP verification error: {e}")
+        raise VerificationError(f"PoP verification failed: {e}")
 
 
 def verify_revocation_signature(

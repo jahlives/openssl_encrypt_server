@@ -23,13 +23,15 @@ from ...config import settings
 from ...core.database import get_db
 from .auth import get_keyserver_auth
 from .schemas import (
+    ChallengeRequest,
+    ChallengeResponse,
     ConfirmationResponse,
     EmailRegisterRequest,
     EmailRegisterResponse,
     ErrorResponse,
-    KeyBundleSchema,
     KeySearchResponse,
     KeyUploadResponse,
+    KeyUploadWithPoP,
     LoginRequest,
     RefreshRequest,
     RegisterResponse,
@@ -471,6 +473,52 @@ async def registration_status(
 
 
 @router.post(
+    "/challenge",
+    response_model=ChallengeResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        401: {"model": ErrorResponse, "description": "Authentication required"},
+    },
+    summary="Request a Proof of Possession challenge",
+)
+@limiter.limit("30/minute")
+async def request_challenge(
+    request: Request,
+    body: ChallengeRequest,
+    db: AsyncSession = Depends(get_db),
+    client_id: str = Depends(get_current_client),
+):
+    """
+    Request a single-use challenge for Proof of Possession key upload.
+
+    The returned nonce must be signed with the ML-DSA private key corresponding
+    to the bundle being uploaded.  The challenge_id and pop_signature must then
+    be included in the subsequent POST / (upload) request.
+
+    Canonical message to sign:
+        b"POP:" + nonce.encode("ascii") + b":" + fingerprint.encode("utf-8")
+
+    Challenges expire after 10 minutes and are single-use.
+
+    Args:
+        body:      Optional fingerprint hint for operator logging.
+        request:   FastAPI request.
+        db:        Database session.
+        client_id: Authenticated client ID.
+
+    Returns:
+        ChallengeResponse: challenge_id, nonce, expires_at
+    """
+    service = KeyserverService(db)
+    result = await service.generate_challenge(
+        client_id=client_id,
+        fingerprint_hint=body.fingerprint,
+        ttl_minutes=settings.keyserver_challenge_ttl_minutes,
+    )
+    return ChallengeResponse(**result)
+
+
+@router.post(
     "",
     response_model=KeyUploadResponse,
     status_code=status.HTTP_200_OK,
@@ -484,21 +532,28 @@ async def registration_status(
 @limiter.limit("60/minute")
 async def upload_key(
     request: Request,
-    bundle: KeyBundleSchema,
+    bundle: KeyUploadWithPoP,
     db: AsyncSession = Depends(get_db),
     client_id: str = Depends(get_current_client),
 ):
     """
-    Upload public key bundle to keyserver.
+    Upload public key bundle to keyserver (requires Proof of Possession).
+
+    Two-step flow:
+    1. Call POST /challenge to obtain a nonce and challenge_id.
+    2. Sign the canonical message with your ML-DSA private key:
+          b"POP:" + nonce.encode("ascii") + b":" + fingerprint.encode("utf-8")
+    3. Include challenge_id and pop_signature (base64) in this request body.
 
     SECURITY:
     - Requires Keyserver JWT token
-    - Verifies self-signature before storage
+    - Requires valid single-use PoP challenge (proves private key access)
+    - Verifies bundle self-signature after PoP
     - Validates fingerprint
     - Enforces algorithm whitelist
 
     Args:
-        bundle: Public key bundle (validated by Pydantic)
+        bundle: Public key bundle with PoP fields (validated by Pydantic)
         request: FastAPI request
         db: Database session
         client_id: Authenticated client ID

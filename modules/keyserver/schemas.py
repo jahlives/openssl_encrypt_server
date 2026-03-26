@@ -134,6 +134,51 @@ class RegistrationStatusResponse(BaseModel):
     token_type: Optional[str] = None
 
 
+class ChallengeRequest(BaseModel):
+    """Request body for POST /api/v1/keys/challenge"""
+
+    fingerprint: Optional[str] = Field(
+        None,
+        max_length=100,
+        description="Optional fingerprint hint for operator logging (not validated)",
+    )
+
+
+class ChallengeResponse(BaseModel):
+    """Response from POST /api/v1/keys/challenge"""
+
+    challenge_id: str  # UUID serialized as string
+    nonce: str  # 64-char lowercase hex (32 random bytes)
+    expires_at: str  # ISO 8601 datetime
+
+
+class KeyUploadWithPoP(KeyBundleSchema):
+    """
+    Key bundle upload with Proof of Possession.
+
+    Extends KeyBundleSchema with two required PoP fields.  The challenge_id
+    and pop_signature fields MUST be excluded when reconstructing the bundle
+    dict for verify_bundle_signature — they are not part of the self-signed
+    message.
+
+    Protocol for pop_signature:
+        canonical_message = b"POP:" + nonce_hex.encode("ascii") + b":" + fingerprint.encode("utf-8")
+        pop_signature     = base64(ML-DSA_sign(private_key, canonical_message))
+    """
+
+    challenge_id: str = Field(
+        ...,
+        description="UUID of the challenge issued by POST /api/v1/keys/challenge",
+    )
+    pop_signature: str = Field(
+        ...,
+        description=(
+            "Base64-encoded ML-DSA signature over "
+            "b'POP:' + nonce_hex.encode('ascii') + b':' + fingerprint.encode('utf-8')"
+        ),
+    )
+
+
 class ErrorResponse(BaseModel):
     """Standard error response"""
 
