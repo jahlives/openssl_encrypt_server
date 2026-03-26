@@ -105,6 +105,7 @@ class EmailRegisterRequest(BaseModel):
 class EmailRegisterResponse(BaseModel):
     """Response for email registration request (202 Accepted)"""
 
+    registration_id: str
     message: str
 
 
@@ -113,6 +114,18 @@ class ConfirmationResponse(BaseModel):
 
     client_id: str
     message: str
+
+
+class RegistrationStatusResponse(BaseModel):
+    """Response for polling registration status"""
+
+    status: str  # "pending" or "confirmed"
+    client_id: Optional[str] = None
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
+    expires_at: Optional[str] = None
+    refresh_expires_at: Optional[str] = None
+    token_type: Optional[str] = None
 
 
 class ErrorResponse(BaseModel):

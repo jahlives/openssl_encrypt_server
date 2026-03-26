@@ -31,6 +31,7 @@ from .schemas import (
     KeyUploadResponse,
     RefreshRequest,
     RegisterResponse,
+    RegistrationStatusResponse,
     RevocationRequest,
     RevocationResponse,
 )
@@ -139,12 +140,13 @@ async def register_email(
         from_address=settings.smtp_from_address,
     )
 
-    await service.create_pending_registration(
+    result = await service.create_pending_registration(
         body.email, settings.keyserver_base_url, email_service
     )
 
     return EmailRegisterResponse(
-        message="Confirmation email sent. Please check your inbox and click the link within 30 minutes."
+        registration_id=result["registration_id"],
+        message="Confirmation email sent. Please check your inbox and click the link within 30 minutes.",
     )
 
 
@@ -362,6 +364,43 @@ def _render_error_html(status_code: int, detail: str) -> str:
     </div>
 </body>
 </html>"""
+
+
+@router.get(
+    "/register/status/{registration_id}",
+    response_model=RegistrationStatusResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"model": ErrorResponse, "description": "Registration not found"},
+        410: {"model": ErrorResponse, "description": "Registration expired"},
+    },
+    summary="Check email registration status",
+)
+@limiter.limit("60/hour")
+async def registration_status(
+    request: Request,
+    registration_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Poll registration status after email registration request.
+
+    Used by the CLI plugin to wait for the user to confirm via email link.
+    Returns "pending" while waiting, or "confirmed" with JWT tokens once confirmed.
+
+    Args:
+        registration_id: The registration ID from the email registration response
+        request: FastAPI request
+        db: Database session
+
+    Returns:
+        RegistrationStatusResponse: Status and optionally tokens
+    """
+    service = KeyserverService(db)
+    auth = get_keyserver_auth()
+    result = await service.check_registration_status(registration_id, auth)
+
+    return RegistrationStatusResponse(**result)
 
 
 @router.post(

@@ -22,6 +22,7 @@ from openssl_encrypt_server.modules.keyserver.schemas import (
     ConfirmationResponse,
     EmailRegisterRequest,
     EmailRegisterResponse,
+    RegistrationStatusResponse,
 )
 
 
@@ -38,8 +39,22 @@ class TestKSPendingRegistrationModel:
         assert "id" in columns
         assert "email" in columns
         assert "confirmation_token" in columns
+        assert "registration_id" in columns
+        assert "status" in columns
+        assert "client_id" in columns
         assert "created_at" in columns
         assert "expires_at" in columns
+        assert "confirmed_at" in columns
+
+    def test_registration_id_column_is_unique(self):
+        """Registration ID column has unique constraint."""
+        col = KSPendingRegistration.__table__.columns["registration_id"]
+        assert col.unique is True
+
+    def test_registration_id_column_is_indexed(self):
+        """Registration ID column is indexed for fast polling."""
+        col = KSPendingRegistration.__table__.columns["registration_id"]
+        assert col.index is True
 
     def test_table_name(self):
         """Table uses ks_ prefix per project convention."""
@@ -119,8 +134,39 @@ class TestEmailRegisterResponse:
 
     def test_response_has_message(self):
         """Response contains a message field."""
-        resp = EmailRegisterResponse(message="Check your email")
+        resp = EmailRegisterResponse(registration_id="reg123", message="Check your email")
         assert resp.message == "Check your email"
+
+    def test_response_has_registration_id(self):
+        """Response contains a registration_id field for polling."""
+        resp = EmailRegisterResponse(registration_id="reg123", message="Check your email")
+        assert resp.registration_id == "reg123"
+
+
+class TestRegistrationStatusResponse:
+    """Tests for the registration status polling response."""
+
+    def test_pending_status(self):
+        """Pending status response has no tokens."""
+        resp = RegistrationStatusResponse(status="pending")
+        assert resp.status == "pending"
+        assert resp.client_id is None
+        assert resp.access_token is None
+
+    def test_confirmed_status_with_tokens(self):
+        """Confirmed status response includes tokens."""
+        resp = RegistrationStatusResponse(
+            status="confirmed",
+            client_id="abc123",
+            access_token="tok_access",
+            refresh_token="tok_refresh",
+            expires_at="2026-03-26T12:00:00Z",
+            refresh_expires_at="2026-04-02T12:00:00Z",
+            token_type="Bearer",
+        )
+        assert resp.status == "confirmed"
+        assert resp.client_id == "abc123"
+        assert resp.access_token == "tok_access"
 
 
 class TestConfirmationResponse:
@@ -170,12 +216,13 @@ class TestCreatePendingRegistration:
 
         mock_email_service = AsyncMock()
 
-        token = await service.create_pending_registration(
+        result = await service.create_pending_registration(
             "user@example.com", "https://keys.example.com", mock_email_service
         )
 
-        assert token is not None
-        assert len(token) > 20  # token_urlsafe(32) produces ~43 chars
+        assert "registration_id" in result
+        assert len(result["registration_id"]) > 20
+        assert "token" in result
         mock_db.add.assert_called_once()
         mock_db.commit.assert_called()
 
@@ -235,12 +282,12 @@ class TestCreatePendingRegistration:
 
         mock_email_service = AsyncMock()
 
-        token = await service.create_pending_registration(
+        result = await service.create_pending_registration(
             "user@example.com", "https://keys.example.com", mock_email_service
         )
 
         # Token should be refreshed
-        assert token != "old_token"
+        assert result["token"] != "old_token"
         mock_email_service.send_confirmation_email.assert_called_once()
         mock_db.commit.assert_called()
 
@@ -286,6 +333,7 @@ class TestConfirmRegistration:
         pending = MagicMock()
         pending.email = "user@example.com"
         pending.confirmation_token = "valid_token"
+        pending.status = "pending"
         pending.expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
 
         mock_result = MagicMock()
@@ -302,7 +350,9 @@ class TestConfirmRegistration:
 
         assert result["client_id"] == "abc123def456"
         mock_db.add.assert_called_once()  # KSClient added
-        mock_db.delete.assert_called_once_with(pending)  # Pending removed
+        # Pending record is now marked confirmed, not deleted
+        assert pending.status == "confirmed"
+        assert pending.client_id == "abc123def456"
 
     @pytest.mark.asyncio
     async def test_sends_welcome_email_with_client_id(self, service, mock_db):
@@ -310,6 +360,7 @@ class TestConfirmRegistration:
         pending = MagicMock()
         pending.email = "user@example.com"
         pending.confirmation_token = "valid_token"
+        pending.status = "pending"
         pending.expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
 
         mock_result = MagicMock()
@@ -334,6 +385,7 @@ class TestConfirmRegistration:
         pending = MagicMock()
         pending.email = "user@example.com"
         pending.confirmation_token = "expired_token"
+        pending.status = "pending"
         pending.expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
 
         mock_result = MagicMock()
@@ -368,11 +420,12 @@ class TestConfirmRegistration:
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_confirmation_deletes_pending_record(self, service, mock_db):
-        """Successful confirmation removes the pending registration."""
+    async def test_confirmation_marks_record_confirmed(self, service, mock_db):
+        """Successful confirmation marks the pending record as confirmed."""
         pending = MagicMock()
         pending.email = "user@example.com"
         pending.confirmation_token = "valid_token"
+        pending.status = "pending"
         pending.expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
 
         mock_result = MagicMock()
@@ -385,7 +438,31 @@ class TestConfirmRegistration:
 
         await service.confirm_registration("valid_token", mock_auth, mock_email_service)
 
-        mock_db.delete.assert_called_once_with(pending)
+        # Record should be marked confirmed, not deleted
+        assert pending.status == "confirmed"
+        assert pending.confirmed_at is not None
+        mock_db.delete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_already_confirmed_returns_client_id(self, service, mock_db):
+        """Clicking the confirmation link again returns the existing client_id."""
+        pending = MagicMock()
+        pending.email = "user@example.com"
+        pending.confirmation_token = "valid_token"
+        pending.status = "confirmed"
+        pending.client_id = "existing_client_123"
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = pending
+        mock_db.execute.return_value = mock_result
+
+        mock_email_service = AsyncMock()
+        mock_auth = MagicMock()
+
+        result = await service.confirm_registration("valid_token", mock_auth, mock_email_service)
+
+        assert result["client_id"] == "existing_client_123"
+        mock_auth.generate_client_id.assert_not_called()  # No new client created
 
 
 class TestCleanupExpiredRegistrations:
@@ -629,6 +706,129 @@ class TestEmailService:
 
 
 # ---------------------------------------------------------------------------
+# Registration Status Polling Tests
+# ---------------------------------------------------------------------------
+
+class TestCheckRegistrationStatus:
+    """Tests for the registration status polling endpoint."""
+
+    @pytest.fixture
+    def mock_db(self):
+        db = AsyncMock()
+        db.add = MagicMock()
+        db.commit = AsyncMock()
+        db.execute = AsyncMock()
+        db.delete = AsyncMock()
+        return db
+
+    @pytest.fixture
+    def service(self, mock_db):
+        from openssl_encrypt_server.modules.keyserver.service import KeyserverService
+        return KeyserverService(mock_db)
+
+    @pytest.mark.asyncio
+    async def test_pending_status_returned(self, service, mock_db):
+        """Status returns 'pending' when registration not yet confirmed."""
+        pending = MagicMock()
+        pending.status = "pending"
+        pending.expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = pending
+        mock_db.execute.return_value = mock_result
+
+        mock_auth = MagicMock()
+        result = await service.check_registration_status("reg_id_123", mock_auth)
+
+        assert result["status"] == "pending"
+        assert "client_id" not in result
+
+    @pytest.mark.asyncio
+    async def test_confirmed_status_returns_tokens(self, service, mock_db):
+        """Status returns tokens when registration is confirmed."""
+        pending = MagicMock()
+        pending.status = "confirmed"
+        pending.client_id = "client_abc123"
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = pending
+        mock_db.execute.return_value = mock_result
+
+        mock_auth = MagicMock()
+        mock_auth.create_token_pair.return_value = {
+            "access_token": "tok_access",
+            "refresh_token": "tok_refresh",
+            "access_token_expires_at": "2026-03-26T13:00:00Z",
+            "refresh_token_expires_at": "2026-04-02T12:00:00Z",
+            "token_type": "Bearer",
+        }
+
+        result = await service.check_registration_status("reg_id_123", mock_auth)
+
+        assert result["status"] == "confirmed"
+        assert result["client_id"] == "client_abc123"
+        assert result["access_token"] == "tok_access"
+        assert result["refresh_token"] == "tok_refresh"
+        mock_auth.create_token_pair.assert_called_once_with("client_abc123")
+
+    @pytest.mark.asyncio
+    async def test_confirmed_deletes_pending_record(self, service, mock_db):
+        """Picking up confirmed tokens deletes the pending record."""
+        pending = MagicMock()
+        pending.status = "confirmed"
+        pending.client_id = "client_abc123"
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = pending
+        mock_db.execute.return_value = mock_result
+
+        mock_auth = MagicMock()
+        mock_auth.create_token_pair.return_value = {
+            "access_token": "tok", "refresh_token": "ref",
+            "access_token_expires_at": "x", "refresh_token_expires_at": "x",
+            "token_type": "Bearer",
+        }
+
+        await service.check_registration_status("reg_id_123", mock_auth)
+
+        mock_db.delete.assert_called_once_with(pending)
+
+    @pytest.mark.asyncio
+    async def test_unknown_registration_id_returns_404(self, service, mock_db):
+        """Unknown registration_id returns 404."""
+        from fastapi import HTTPException
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result
+
+        mock_auth = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service.check_registration_status("nonexistent", mock_auth)
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_expired_pending_returns_410(self, service, mock_db):
+        """Expired pending registration returns 410."""
+        from fastapi import HTTPException
+
+        pending = MagicMock()
+        pending.status = "pending"
+        pending.expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = pending
+        mock_db.execute.return_value = mock_result
+
+        mock_auth = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service.check_registration_status("expired_reg", mock_auth)
+        assert exc_info.value.status_code == 410
+
+
+# ---------------------------------------------------------------------------
 # Route-Level Tests
 # ---------------------------------------------------------------------------
 
@@ -664,6 +864,22 @@ class TestRegistrationRouteConfig:
 
         for route in router.routes:
             if hasattr(route, "path") and route.path == "/confirm/{token}":
+                assert "GET" in route.methods
+                break
+
+    def test_status_endpoint_exists(self):
+        """The registration status polling endpoint is defined."""
+        from openssl_encrypt_server.modules.keyserver.routes import router
+
+        paths = [route.path for route in router.routes]
+        assert "/api/v1/keys/register/status/{registration_id}" in paths
+
+    def test_status_is_get(self):
+        """Status endpoint uses GET method."""
+        from openssl_encrypt_server.modules.keyserver.routes import router
+
+        for route in router.routes:
+            if hasattr(route, "path") and route.path == "/register/status/{registration_id}":
                 assert "GET" in route.methods
                 break
 

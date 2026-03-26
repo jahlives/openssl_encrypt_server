@@ -272,7 +272,7 @@ class KeyserverService:
 
     async def create_pending_registration(
         self, email: str, base_url: str, email_service
-    ) -> str:
+    ) -> dict:
         """
         Create a pending registration and send a confirmation email.
 
@@ -282,7 +282,7 @@ class KeyserverService:
             email_service: EmailService instance for sending emails
 
         Returns:
-            str: Confirmation token
+            dict: Contains registration_id and confirmation_token
 
         Raises:
             HTTPException: 409 if email already has an active account
@@ -304,12 +304,17 @@ class KeyserverService:
         existing_pending = result.scalar_one_or_none()
 
         token = secrets.token_urlsafe(32)
+        registration_id = secrets.token_urlsafe(32)
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(minutes=30)
 
         if existing_pending:
             # Update existing pending registration with new token and expiry
             existing_pending.confirmation_token = token
+            existing_pending.registration_id = registration_id
+            existing_pending.status = "pending"
+            existing_pending.client_id = None
+            existing_pending.confirmed_at = None
             existing_pending.created_at = now
             existing_pending.expires_at = expires_at
         else:
@@ -317,6 +322,7 @@ class KeyserverService:
             pending = KSPendingRegistration(
                 email=email,
                 confirmation_token=token,
+                registration_id=registration_id,
                 created_at=now,
                 expires_at=expires_at,
             )
@@ -328,13 +334,16 @@ class KeyserverService:
         await email_service.send_confirmation_email(email, token, base_url)
 
         logger.info(f"Pending registration created for {email}")
-        return token
+        return {"registration_id": registration_id, "token": token}
 
     async def confirm_registration(
         self, token: str, auth, email_service
     ) -> dict:
         """
         Confirm a pending registration and create the account.
+
+        Keeps the pending record with status="confirmed" so the polling
+        endpoint can deliver JWT tokens to the client that initiated registration.
 
         Args:
             token: Confirmation token from email link
@@ -359,6 +368,9 @@ class KeyserverService:
                 detail="Invalid confirmation token",
             )
 
+        if pending.status == "confirmed":
+            return {"client_id": pending.client_id}
+
         if pending.expires_at < datetime.now(timezone.utc):
             raise HTTPException(
                 status_code=status.HTTP_410_GONE,
@@ -370,8 +382,11 @@ class KeyserverService:
         client = KSClient(client_id=client_id, email=pending.email)
         self.db.add(client)
 
-        # Remove the pending registration
-        await self.db.delete(pending)
+        # Mark pending record as confirmed (keep for polling endpoint)
+        pending.status = "confirmed"
+        pending.client_id = client_id
+        pending.confirmed_at = datetime.now(timezone.utc)
+
         await self.db.commit()
 
         # Send welcome email with client_id
@@ -381,22 +396,81 @@ class KeyserverService:
 
         return {"client_id": client_id}
 
+    async def check_registration_status(
+        self, registration_id: str, auth
+    ) -> dict:
+        """
+        Check the status of a pending registration (for polling).
+
+        If confirmed, generates JWT tokens and deletes the pending record.
+
+        Args:
+            registration_id: The registration ID returned at registration time
+            auth: TokenAuth instance for creating token pairs
+
+        Returns:
+            dict: Status and optionally tokens if confirmed
+
+        Raises:
+            HTTPException: 404 if registration_id not found
+        """
+        stmt = select(KSPendingRegistration).where(
+            KSPendingRegistration.registration_id == registration_id
+        )
+        result = await self.db.execute(stmt)
+        pending = result.scalar_one_or_none()
+
+        if not pending:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Registration not found",
+            )
+
+        if pending.status == "pending":
+            # Check if expired
+            if pending.expires_at < datetime.now(timezone.utc):
+                raise HTTPException(
+                    status_code=status.HTTP_410_GONE,
+                    detail="Registration has expired. Please register again.",
+                )
+            return {"status": "pending"}
+
+        # Status is "confirmed" — issue tokens and clean up
+        tokens = auth.create_token_pair(pending.client_id)
+        client_id = pending.client_id
+
+        # Delete the pending record (tokens delivered)
+        await self.db.delete(pending)
+        await self.db.commit()
+
+        return {
+            "status": "confirmed",
+            "client_id": client_id,
+            **tokens,
+        }
+
     async def cleanup_expired_registrations(self) -> int:
         """
-        Delete expired pending registrations.
+        Delete expired pending registrations and old confirmed records.
 
         Returns:
             int: Number of records deleted
         """
+        now = datetime.now(timezone.utc)
         stmt = delete(KSPendingRegistration).where(
-            KSPendingRegistration.expires_at < datetime.now(timezone.utc)
+            or_(
+                # Expired pending registrations
+                (KSPendingRegistration.expires_at < now) & (KSPendingRegistration.status == "pending"),
+                # Confirmed records older than 5 minutes (grace period for token pickup)
+                (KSPendingRegistration.confirmed_at < now - timedelta(minutes=5)) & (KSPendingRegistration.status == "confirmed"),
+            )
         )
         result = await self.db.execute(stmt)
         await self.db.commit()
 
         count = result.rowcount
         if count > 0:
-            logger.info(f"Cleaned up {count} expired pending registrations")
+            logger.info(f"Cleaned up {count} expired/old pending registrations")
         return count
 
     async def _log_access(

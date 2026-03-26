@@ -47,11 +47,15 @@ class KSPendingRegistration(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
     confirmation_token = Column(String(64), unique=True, nullable=False, index=True)
+    registration_id = Column(String(64), unique=True, nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="pending")  # "pending" or "confirmed"
+    client_id = Column(String(64), nullable=True)  # Set on confirmation
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     expires_at = Column(DateTime(timezone=True), nullable=False)
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
 
     def __repr__(self):
-        return f"<KSPendingRegistration(email={self.email})>"
+        return f"<KSPendingRegistration(email={self.email}, status={self.status})>"
 
 
 class KSKey(Base):
