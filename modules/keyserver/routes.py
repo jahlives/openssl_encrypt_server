@@ -4,6 +4,7 @@ Keyserver API Routes
 
 Endpoints:
 - POST /api/v1/keys/register - Register new client (no auth)
+- POST /api/v1/keys/login - Login with client_id to get JWT tokens (no auth)
 - POST /api/v1/keys - Upload key (auth required)
 - GET /api/v1/keys/search - Search key (public)
 - POST /api/v1/keys/{fingerprint}/revoke - Revoke key (auth required)
@@ -29,6 +30,7 @@ from .schemas import (
     KeyBundleSchema,
     KeySearchResponse,
     KeyUploadResponse,
+    LoginRequest,
     RefreshRequest,
     RegisterResponse,
     RegistrationStatusResponse,
@@ -97,6 +99,69 @@ async def register(
 
     auth = get_keyserver_auth()
     return await auth.register_client()
+
+
+@router.post(
+    "/login",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        401: {"model": ErrorResponse, "description": "Invalid client ID"},
+    },
+    summary="Login with client ID",
+)
+@limiter.limit("5/minute")
+async def login(
+    request: Request,
+    body: LoginRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Authenticate with client_id and obtain JWT tokens.
+
+    Use this endpoint when you have a client_id (from registration email)
+    but need to obtain JWT access and refresh tokens for API operations.
+
+    SECURITY:
+    - Strict rate limiting (5/minute) to prevent brute force
+    - Returns generic error for invalid client_id (no enumeration)
+    - Uses constant-time comparison internally
+
+    Args:
+        request: FastAPI request
+        body: LoginRequest containing the client_id
+        db: Database session
+
+    Returns:
+        RegisterResponse: Access and refresh tokens
+    """
+    service = KeyserverService(db)
+    client = await service.get_client_by_id(body.client_id)
+
+    if not client:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
+
+    auth = get_keyserver_auth()
+    tokens = auth.create_token_pair(body.client_id)
+
+    # Update last seen
+    try:
+        await auth.update_last_seen(body.client_id)
+    except Exception:
+        pass
+
+    return RegisterResponse(
+        client_id=body.client_id,
+        token=tokens["access_token"],
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        expires_at=tokens["access_token_expires_at"],
+        refresh_expires_at=tokens["refresh_token_expires_at"],
+        token_type=tokens["token_type"],
+    )
 
 
 @router.post(

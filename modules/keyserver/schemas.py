@@ -22,6 +22,12 @@ class RegisterResponse(BaseModel):
     token_type: str = "Bearer"
 
 
+class LoginRequest(BaseModel):
+    """Request body for client login."""
+
+    client_id: str = Field(..., min_length=1, max_length=255)
+
+
 class RefreshRequest(BaseModel):
     """Request body for token refresh."""
 

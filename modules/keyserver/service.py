@@ -5,6 +5,7 @@ Keyserver business logic.
 Handles key upload, search, and revocation operations.
 """
 
+import hmac
 import json
 import logging
 import secrets
@@ -32,6 +33,26 @@ class KeyserverService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def get_client_by_id(self, client_id: str) -> Optional[KSClient]:
+        """
+        Look up a client by client_id using constant-time comparison.
+
+        Args:
+            client_id: The client identifier to look up
+
+        Returns:
+            KSClient if found, None otherwise
+        """
+        stmt = select(KSClient)
+        result = await self.db.execute(stmt)
+        clients = result.scalars().all()
+
+        for client in clients:
+            if hmac.compare_digest(client.client_id, client_id):
+                return client
+
+        return None
 
     async def upload_key(
         self, client_id: str, bundle: KeyBundleSchema, ip_address: Optional[str] = None

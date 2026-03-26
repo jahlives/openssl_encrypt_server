@@ -352,5 +352,44 @@ class TestMigrationScriptNoCliCredentials(unittest.TestCase):
                           "Migration must not require --database-url CLI argument")
 
 
+class TestLoginEndpointSchema(unittest.TestCase):
+    """Test that the login endpoint schema and route exist."""
+
+    def test_login_schema_exists(self):
+        """LoginRequest schema must exist in schemas module."""
+        schemas_path = Path(__file__).parent.parent / "modules" / "keyserver" / "schemas.py"
+        with open(schemas_path) as f:
+            source = f.read()
+        self.assertIn("class LoginRequest", source)
+        self.assertIn("client_id", source)
+
+    def test_login_route_exists(self):
+        """Login route must be defined in keyserver routes."""
+        routes_path = Path(__file__).parent.parent / "modules" / "keyserver" / "routes.py"
+        with open(routes_path) as f:
+            source = f.read()
+        self.assertIn('"/login"', source)
+        self.assertIn("async def login", source)
+
+    def test_login_route_is_rate_limited(self):
+        """Login route must have strict rate limiting."""
+        routes_path = Path(__file__).parent.parent / "modules" / "keyserver" / "routes.py"
+        with open(routes_path) as f:
+            source = f.read()
+        # Find the login function and check it has rate limiting before it
+        login_idx = source.index("async def login")
+        preceding = source[max(0, login_idx - 200):login_idx]
+        self.assertIn("limiter.limit", preceding,
+                       "Login endpoint must be rate-limited")
+
+    def test_get_client_by_id_uses_constant_time(self):
+        """get_client_by_id must use constant-time comparison."""
+        service_path = Path(__file__).parent.parent / "modules" / "keyserver" / "service.py"
+        with open(service_path) as f:
+            source = f.read()
+        self.assertIn("hmac.compare_digest", source,
+                       "Client lookup must use constant-time comparison")
+
+
 if __name__ == "__main__":
     unittest.main()
