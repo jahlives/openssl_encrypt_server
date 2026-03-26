@@ -220,7 +220,28 @@ class KeyserverService:
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Verification failed"
             )
 
-        # Check if key already exists
+        # Check if client already has an active key with the same email
+        if bundle.email:
+            stmt = (
+                select(KSKey)
+                .where(
+                    KSKey.owner_client_id == client_id,
+                    KSKey.email == bundle.email,
+                    KSKey.revoked.is_(False),
+                )
+            )
+            result = await self.db.execute(stmt)
+            duplicate_email_key = result.scalar_one_or_none()
+            if duplicate_email_key:
+                logger.info(
+                    f"Client {client_id} already has an active key for email {bundle.email}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"An active key for email {bundle.email} already exists",
+                )
+
+        # Check if key already exists (by fingerprint)
         stmt = select(KSKey).where(KSKey.fingerprint == bundle.fingerprint)
         result = await self.db.execute(stmt)
         existing_key = result.scalar_one_or_none()
