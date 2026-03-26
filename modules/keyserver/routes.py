@@ -12,6 +12,7 @@ Endpoints:
 import logging
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, Security, status
+from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from slowapi import Limiter
@@ -21,6 +22,9 @@ from ...config import settings
 from ...core.database import get_db
 from .auth import get_keyserver_auth
 from .schemas import (
+    ConfirmationResponse,
+    EmailRegisterRequest,
+    EmailRegisterResponse,
     ErrorResponse,
     KeyBundleSchema,
     KeySearchResponse,
@@ -92,6 +96,272 @@ async def register(
 
     auth = get_keyserver_auth()
     return await auth.register_client()
+
+
+@router.post(
+    "/register/email",
+    response_model=EmailRegisterResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        409: {"model": ErrorResponse, "description": "Email already registered"},
+    },
+    summary="Register with email confirmation",
+)
+@limiter.limit("5/hour")
+async def register_email(
+    request: Request,
+    body: EmailRegisterRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Register a new keyserver client with email confirmation.
+
+    Sends a confirmation email with a link that expires in 30 minutes.
+    The account is only created after the link is clicked.
+
+    Args:
+        body: EmailRegisterRequest containing the email address
+        request: FastAPI request
+        db: Database session
+
+    Returns:
+        EmailRegisterResponse: Confirmation message
+    """
+    service = KeyserverService(db)
+
+    from ...core.email import EmailService
+    email_service = EmailService(
+        smtp_host=settings.smtp_host,
+        smtp_port=settings.smtp_port,
+        smtp_username=settings.smtp_username,
+        smtp_password=settings.smtp_password,
+        smtp_use_tls=settings.smtp_use_tls,
+        from_address=settings.smtp_from_address,
+    )
+
+    await service.create_pending_registration(
+        body.email, settings.keyserver_base_url, email_service
+    )
+
+    return EmailRegisterResponse(
+        message="Confirmation email sent. Please check your inbox and click the link within 30 minutes."
+    )
+
+
+@router.get(
+    "/confirm/{token}",
+    response_model=ConfirmationResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"model": ErrorResponse, "description": "Invalid token"},
+        410: {"model": ErrorResponse, "description": "Token expired"},
+    },
+    summary="Confirm email registration",
+)
+@limiter.limit("20/hour")
+async def confirm_registration(
+    request: Request,
+    token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Confirm email registration and activate the account.
+
+    Returns the client_id and sends a welcome email containing it.
+
+    Args:
+        token: Confirmation token from the email link
+        request: FastAPI request
+        db: Database session
+
+    Returns:
+        ConfirmationResponse: Client ID and confirmation message
+    """
+    service = KeyserverService(db)
+
+    from ...core.email import EmailService
+    email_service = EmailService(
+        smtp_host=settings.smtp_host,
+        smtp_port=settings.smtp_port,
+        smtp_username=settings.smtp_username,
+        smtp_password=settings.smtp_password,
+        smtp_use_tls=settings.smtp_use_tls,
+        from_address=settings.smtp_from_address,
+    )
+
+    auth = get_keyserver_auth()
+    accept = request.headers.get("accept", "")
+    is_browser = "text/html" in accept
+
+    try:
+        result = await service.confirm_registration(token, auth, email_service)
+    except HTTPException as e:
+        if is_browser:
+            return HTMLResponse(
+                content=_render_error_html(e.status_code, e.detail),
+                status_code=e.status_code,
+            )
+        raise
+
+    client_id = result["client_id"]
+
+    if is_browser:
+        return HTMLResponse(content=_render_confirmation_html(client_id))
+
+    return ConfirmationResponse(
+        client_id=client_id,
+        message="Account activated successfully. Your client ID has also been sent to your email.",
+    )
+
+
+def _render_confirmation_html(client_id: str) -> str:
+    """Render the browser-friendly confirmation page."""
+    # Escape client_id for safe HTML embedding (it's hex, but defense in depth)
+    import html
+    safe_client_id = html.escape(client_id)
+
+    return f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Registration Confirmed</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 520px;
+            margin: 60px auto;
+            padding: 0 20px;
+            color: #1a1a1a;
+            background: #f8f9fa;
+        }}
+        .card {{
+            background: #fff;
+            border-radius: 8px;
+            padding: 32px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }}
+        h1 {{
+            color: #16a34a;
+            font-size: 24px;
+            margin-top: 0;
+        }}
+        .client-id-box {{
+            background: #f4f4f5;
+            border: 1px solid #e4e4e7;
+            border-radius: 6px;
+            padding: 16px;
+            font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+            font-size: 15px;
+            word-break: break-all;
+            position: relative;
+            margin: 16px 0;
+        }}
+        .copy-btn {{
+            display: inline-block;
+            margin-top: 12px;
+            padding: 8px 20px;
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }}
+        .copy-btn:hover {{
+            background: #1d4ed8;
+        }}
+        .copy-btn.copied {{
+            background: #16a34a;
+        }}
+        .note {{
+            color: #6b7280;
+            font-size: 14px;
+            margin-top: 20px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Registration Confirmed</h1>
+        <p>Your keyserver account has been activated successfully.</p>
+        <p><strong>Your Client ID:</strong></p>
+        <div class="client-id-box" id="clientId">{safe_client_id}</div>
+        <button class="copy-btn" onclick="copyClientId(this)">Copy to Clipboard</button>
+        <p class="note">
+            Add this client ID to your keyserver plugin configuration.
+            A copy has also been sent to your email.
+        </p>
+    </div>
+    <script>
+        function copyClientId(btn) {{
+            var text = document.getElementById('clientId').textContent;
+            navigator.clipboard.writeText(text).then(function() {{
+                btn.textContent = 'Copied!';
+                btn.classList.add('copied');
+                setTimeout(function() {{
+                    btn.textContent = 'Copy to Clipboard';
+                    btn.classList.remove('copied');
+                }}, 2000);
+            }});
+        }}
+    </script>
+</body>
+</html>"""
+
+
+def _render_error_html(status_code: int, detail: str) -> str:
+    """Render a browser-friendly error page for confirmation failures."""
+    import html
+    safe_detail = html.escape(detail)
+
+    if status_code == 410:
+        title = "Link Expired"
+        color = "#d97706"
+    elif status_code == 404:
+        title = "Invalid Link"
+        color = "#dc2626"
+    else:
+        title = "Error"
+        color = "#dc2626"
+
+    return f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{title}</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 520px;
+            margin: 60px auto;
+            padding: 0 20px;
+            color: #1a1a1a;
+            background: #f8f9fa;
+        }}
+        .card {{
+            background: #fff;
+            border-radius: 8px;
+            padding: 32px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }}
+        h1 {{
+            color: {color};
+            font-size: 24px;
+            margin-top: 0;
+        }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>{title}</h1>
+        <p>{safe_detail}</p>
+    </div>
+</body>
+</html>"""
 
 
 @router.post(

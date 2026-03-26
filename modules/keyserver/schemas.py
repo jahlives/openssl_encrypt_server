@@ -7,7 +7,7 @@ Request/response validation for keyserver endpoints.
 
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class RegisterResponse(BaseModel):
@@ -94,6 +94,25 @@ class RevocationResponse(BaseModel):
     success: bool = True
     fingerprint: str
     message: str = "Key revoked successfully"
+
+
+class EmailRegisterRequest(BaseModel):
+    """Request for email-confirmed registration"""
+
+    email: EmailStr = Field(..., max_length=255)
+
+
+class EmailRegisterResponse(BaseModel):
+    """Response for email registration request (202 Accepted)"""
+
+    message: str
+
+
+class ConfirmationResponse(BaseModel):
+    """Response for successful email confirmation"""
+
+    client_id: str
+    message: str
 
 
 class ErrorResponse(BaseModel):

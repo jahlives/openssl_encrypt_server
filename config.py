@@ -215,6 +215,22 @@ class Settings(BaseSettings):
         default=None, validation_alias="REGISTRATION_SECRET"
     )
 
+    # Email verification for keyserver registration
+    keyserver_require_email_verification: bool = Field(
+        default=False, validation_alias="KEYSERVER_REQUIRE_EMAIL_VERIFICATION"
+    )
+    keyserver_base_url: str = Field(
+        default="", validation_alias="KEYSERVER_BASE_URL"
+    )
+
+    # SMTP configuration for email sending
+    smtp_host: str = Field(default="", validation_alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, validation_alias="SMTP_PORT")
+    smtp_username: Optional[str] = Field(default=None, validation_alias="SMTP_USERNAME")
+    smtp_password: Optional[str] = Field(default=None, validation_alias="SMTP_PASSWORD")
+    smtp_use_tls: bool = Field(default=True, validation_alias="SMTP_USE_TLS")
+    smtp_from_address: str = Field(default="", validation_alias="SMTP_FROM_ADDRESS")
+
     # SECURITY: Explicit opt-in to bypass security validation for local development ONLY.
     # This is separate from debug mode to prevent accidental security bypasses.
     allow_insecure_defaults: bool = Field(
@@ -443,6 +459,24 @@ def validate_config(settings: Settings):
             raise ValueError(
                 "POSTGRES_PASSWORD contains a known default value and is not safe for production. "
                 "Set a strong, unique password."
+            )
+
+    # Validate email verification configuration
+    if settings.keyserver_require_email_verification and settings.keyserver_enabled:
+        if not settings.smtp_host:
+            raise ValueError(
+                "SMTP_HOST is required when KEYSERVER_REQUIRE_EMAIL_VERIFICATION is enabled. "
+                "Configure SMTP settings for sending confirmation emails."
+            )
+        if not settings.smtp_from_address:
+            raise ValueError(
+                "SMTP_FROM_ADDRESS is required when KEYSERVER_REQUIRE_EMAIL_VERIFICATION is enabled. "
+                "Set the sender email address for confirmation emails."
+            )
+        if not settings.keyserver_base_url:
+            raise ValueError(
+                "KEYSERVER_BASE_URL is required when KEYSERVER_REQUIRE_EMAIL_VERIFICATION is enabled. "
+                "Set the base URL for building confirmation links (e.g. https://keys.example.com)."
             )
 
     # Validate pepper configuration

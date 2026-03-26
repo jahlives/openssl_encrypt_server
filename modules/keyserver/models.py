@@ -25,12 +25,33 @@ class KSClient(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     client_id = Column(String(64), unique=True, nullable=False, index=True)
+    email = Column(String(255), unique=True, nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
     client_metadata = Column(JSON, nullable=True)  # Optional client info
 
     def __repr__(self):
         return f"<KSClient(client_id={self.client_id})>"
+
+
+class KSPendingRegistration(Base):
+    """
+    Pending email registration awaiting confirmation.
+
+    Records are created when a user submits their email for registration
+    and deleted upon successful confirmation or expiry cleanup.
+    """
+
+    __tablename__ = "ks_pending_registrations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    confirmation_token = Column(String(64), unique=True, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+
+    def __repr__(self):
+        return f"<KSPendingRegistration(email={self.email})>"
 
 
 class KSKey(Base):

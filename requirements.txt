@@ -26,5 +26,9 @@ qrcode[pil]>=7.4,<8.0  # QR code generation for TOTP
 argon2-cffi>=23.1.0,<24.0.0  # Backup code hashing
 cryptography>=46.0.5,<47.0.0  # Fernet encryption, certificate parsing
 
+# Email sending (async SMTP)
+aiosmtplib>=2.0.0,<3.0.0
+pydantic[email]>=2.0,<3.0
+
 # Date parsing
 python-dateutil>=2.8.2,<3.0.0

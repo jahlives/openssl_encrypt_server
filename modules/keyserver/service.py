@@ -7,14 +7,15 @@ Handles key upload, search, and revocation operations.
 
 import json
 import logging
-from datetime import datetime, timezone
+import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import KSAccessLog, KSKey
+from .models import KSAccessLog, KSClient, KSKey, KSPendingRegistration
 from .schemas import KeyBundleSchema, RevocationRequest
 from .verification import (
     FingerprintMismatchError,
@@ -268,6 +269,135 @@ class KeyserverService:
             "fingerprint": fingerprint,
             "message": "Key revoked successfully",
         }
+
+    async def create_pending_registration(
+        self, email: str, base_url: str, email_service
+    ) -> str:
+        """
+        Create a pending registration and send a confirmation email.
+
+        Args:
+            email: Email address to register
+            base_url: Base URL for confirmation link
+            email_service: EmailService instance for sending emails
+
+        Returns:
+            str: Confirmation token
+
+        Raises:
+            HTTPException: 409 if email already has an active account
+        """
+        # Check if email already has an active account
+        stmt = select(KSClient).where(KSClient.email == email)
+        result = await self.db.execute(stmt)
+        existing_client = result.scalar_one_or_none()
+
+        if existing_client:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An account with this email already exists",
+            )
+
+        # Check for existing pending registration
+        stmt = select(KSPendingRegistration).where(KSPendingRegistration.email == email)
+        result = await self.db.execute(stmt)
+        existing_pending = result.scalar_one_or_none()
+
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(minutes=30)
+
+        if existing_pending:
+            # Update existing pending registration with new token and expiry
+            existing_pending.confirmation_token = token
+            existing_pending.created_at = now
+            existing_pending.expires_at = expires_at
+        else:
+            # Create new pending registration
+            pending = KSPendingRegistration(
+                email=email,
+                confirmation_token=token,
+                created_at=now,
+                expires_at=expires_at,
+            )
+            self.db.add(pending)
+
+        await self.db.commit()
+
+        # Send confirmation email
+        await email_service.send_confirmation_email(email, token, base_url)
+
+        logger.info(f"Pending registration created for {email}")
+        return token
+
+    async def confirm_registration(
+        self, token: str, auth, email_service
+    ) -> dict:
+        """
+        Confirm a pending registration and create the account.
+
+        Args:
+            token: Confirmation token from email link
+            auth: TokenAuth instance for generating client_id
+            email_service: EmailService instance for sending welcome email
+
+        Returns:
+            dict: Contains client_id
+
+        Raises:
+            HTTPException: 404 if token not found, 410 if expired
+        """
+        stmt = select(KSPendingRegistration).where(
+            KSPendingRegistration.confirmation_token == token
+        )
+        result = await self.db.execute(stmt)
+        pending = result.scalar_one_or_none()
+
+        if not pending:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Invalid confirmation token",
+            )
+
+        if pending.expires_at < datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="Confirmation link has expired. Please register again.",
+            )
+
+        # Create the client account
+        client_id = auth.generate_client_id()
+        client = KSClient(client_id=client_id, email=pending.email)
+        self.db.add(client)
+
+        # Remove the pending registration
+        await self.db.delete(pending)
+        await self.db.commit()
+
+        # Send welcome email with client_id
+        await email_service.send_welcome_email(pending.email, client_id)
+
+        logger.info(f"Registration confirmed for {pending.email}, client_id: {client_id[:8]}...")
+
+        return {"client_id": client_id}
+
+    async def cleanup_expired_registrations(self) -> int:
+        """
+        Delete expired pending registrations.
+
+        Returns:
+            int: Number of records deleted
+        """
+        stmt = delete(KSPendingRegistration).where(
+            KSPendingRegistration.expires_at < datetime.now(timezone.utc)
+        )
+        result = await self.db.execute(stmt)
+        await self.db.commit()
+
+        count = result.rowcount
+        if count > 0:
+            logger.info(f"Cleaned up {count} expired pending registrations")
+        return count
 
     async def _log_access(
         self,
