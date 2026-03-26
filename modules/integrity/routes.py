@@ -221,6 +221,7 @@ async def verify_batch(
 @limiter.limit("60/minute")
 @router.get("/stats", response_model=StatsResponse)
 async def get_stats(
+    request: Request,
     cert_fingerprint: str = Depends(require_integrity_auth),
     db: AsyncSession = Depends(get_db),
 ):
