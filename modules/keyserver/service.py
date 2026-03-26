@@ -328,7 +328,7 @@ class KeyserverService:
         )
 
         result = await self.db.execute(stmt)
-        key = result.scalar_one_or_none()
+        key = result.scalars().first()
 
         if not key:
             logger.info(f"Key not found for query: '{query}'")
