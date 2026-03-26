@@ -1,0 +1,6 @@
+# Use this override when running without a reverse proxy:
+#   docker-compose -f docker-compose.yml -f docker-compose.standalone.yml up
+services:
+  api:
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
