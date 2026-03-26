@@ -231,7 +231,7 @@ class KeyserverService:
                 )
             )
             result = await self.db.execute(stmt)
-            duplicate_email_key = result.scalar_one_or_none()
+            duplicate_email_key = result.scalars().first()
             if duplicate_email_key:
                 logger.info(
                     f"Client {client_id} already has an active key for email {bundle.email}"
