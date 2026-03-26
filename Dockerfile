@@ -45,8 +45,9 @@ RUN apt-get update && apt-get install -y \
 COPY --from=builder /usr/local/lib/liboqs.so* /usr/local/lib/
 COPY --from=builder /usr/local/include/oqs /usr/local/include/oqs
 
-# Copy liboqs-python from builder
+# Copy liboqs-python from builder (include dist-info for version metadata)
 COPY --from=builder /usr/local/lib/python3.11/site-packages/oqs /usr/local/lib/python3.11/site-packages/oqs
+COPY --from=builder /usr/local/lib/python3.11/site-packages/liboqs_python-0.12.0.dist-info /usr/local/lib/python3.11/site-packages/liboqs_python-0.12.0.dist-info
 
 RUN ldconfig
 
