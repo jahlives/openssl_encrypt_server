@@ -71,6 +71,9 @@ services:
       # Integrity Module
       INTEGRITY_AUTH_MODE: ${INTEGRITY_AUTH_MODE:-proxy}
 
+      # Keyserver email registration
+      KEYSERVER_BASE_URL: ${KEYSERVER_BASE_URL:-}
+
       # SMTP (email registration)
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
