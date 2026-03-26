@@ -89,6 +89,7 @@ async def store_hash(
 @limiter.limit("60/minute")
 @router.get("/hashes", response_model=HashListResponse)
 async def list_hashes(
+    request: Request,
     cert_fingerprint: str = Depends(require_integrity_auth),
     db: AsyncSession = Depends(get_db),
 ):
@@ -102,6 +103,7 @@ async def list_hashes(
 @limiter.limit("60/minute")
 @router.get("/hashes/{file_id}", response_model=HashResponse)
 async def get_hash(
+    request: Request,
     file_id: str,
     cert_fingerprint: str = Depends(require_integrity_auth),
     db: AsyncSession = Depends(get_db),
@@ -133,6 +135,7 @@ async def update_hash(
 @limiter.limit("60/minute")
 @router.delete("/hashes/{file_id}")
 async def delete_hash(
+    request: Request,
     file_id: str,
     cert_fingerprint: str = Depends(require_integrity_auth),
     db: AsyncSession = Depends(get_db),
@@ -147,6 +150,7 @@ async def delete_hash(
 @limiter.limit("60/minute")
 @router.delete("/hashes", response_model=DeleteResponse)
 async def delete_all_hashes(
+    request: Request,
     cert_fingerprint: str = Depends(require_integrity_auth),
     db: AsyncSession = Depends(get_db),
 ):
