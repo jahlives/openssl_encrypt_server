@@ -377,6 +377,7 @@ class TestConfirmRegistration:
         mock_email_service = AsyncMock()
         mock_auth = MagicMock()
         mock_auth.generate_client_id.return_value = "abc123def456"
+        mock_auth.secret = "test_secret_key"
 
         result = await service.confirm_registration(
             "valid_token", mock_auth, mock_email_service
@@ -404,6 +405,7 @@ class TestConfirmRegistration:
         mock_email_service = AsyncMock()
         mock_auth = MagicMock()
         mock_auth.generate_client_id.return_value = "abc123def456"
+        mock_auth.secret = "test_secret_key"
 
         await service.confirm_registration("valid_token", mock_auth, mock_email_service)
 
@@ -469,6 +471,7 @@ class TestConfirmRegistration:
         mock_email_service = AsyncMock()
         mock_auth = MagicMock()
         mock_auth.generate_client_id.return_value = "abc123"
+        mock_auth.secret = "test_secret_key"
 
         await service.confirm_registration("valid_token", mock_auth, mock_email_service)
 
@@ -1034,14 +1037,14 @@ class TestRegistrationRouteConfig:
         from openssl_encrypt_server.modules.keyserver.routes import router
 
         paths = [route.path for route in router.routes]
-        assert "/api/v1/keys/register/email" in paths
+        assert "/register/email" in paths
 
     def test_confirm_endpoint_exists(self):
         """The confirmation endpoint is defined."""
         from openssl_encrypt_server.modules.keyserver.routes import router
 
         paths = [route.path for route in router.routes]
-        assert "/api/v1/keys/confirm/{token}" in paths
+        assert "/confirm/{token}" in paths
 
     def test_register_email_is_post(self):
         """Email registration endpoint uses POST method."""
@@ -1066,7 +1069,7 @@ class TestRegistrationRouteConfig:
         from openssl_encrypt_server.modules.keyserver.routes import router
 
         paths = [route.path for route in router.routes]
-        assert "/api/v1/keys/register/status/{registration_id}" in paths
+        assert "/register/status/{registration_id}" in paths
 
     def test_status_is_get(self):
         """Status endpoint uses GET method."""
