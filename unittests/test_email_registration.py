@@ -1143,3 +1143,213 @@ class TestConfirmationHtmlRendering:
         html = _render_error_html(400, '<script>alert("xss")</script>')
         assert "<script>" not in html
         assert "&lt;script&gt;" in html
+
+
+# ---------------------------------------------------------------------------
+# Finding #8 — SMTP TLS Verification Guardrails
+# ---------------------------------------------------------------------------
+
+
+class TestSmtpTlsHostnameOverride:
+    """Tests for SMTP TLS hostname override (finding #8, LAN IP scenario)."""
+
+    def test_settings_has_smtp_tls_hostname_field(self):
+        """Settings must expose smtp_tls_hostname for TLS SNI override."""
+        from openssl_encrypt_server.config import Settings
+
+        assert hasattr(Settings, "model_fields")
+        assert "smtp_tls_hostname" in Settings.model_fields
+
+    def test_smtp_tls_hostname_defaults_to_none(self):
+        """smtp_tls_hostname should default to None (use smtp_host)."""
+        from openssl_encrypt_server.config import Settings
+
+        fields = Settings.model_fields
+        assert fields["smtp_tls_hostname"].default is None
+
+    def test_email_service_accepts_tls_hostname(self):
+        """EmailService constructor must accept smtp_tls_hostname parameter."""
+        from openssl_encrypt_server.core.email import EmailService
+
+        service = EmailService(
+            smtp_host="192.168.1.50",
+            smtp_port=2525,
+            smtp_tls_hostname="mail.example.com",
+            from_address="noreply@example.com",
+        )
+        assert service.smtp_tls_hostname == "mail.example.com"
+
+    def test_email_service_tls_hostname_defaults_to_none(self):
+        """EmailService smtp_tls_hostname defaults to None."""
+        from openssl_encrypt_server.core.email import EmailService
+
+        service = EmailService(
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            from_address="noreply@example.com",
+        )
+        assert service.smtp_tls_hostname is None
+
+    @pytest.mark.asyncio
+    async def test_tls_hostname_sets_server_hostname_in_send(self):
+        """When smtp_tls_hostname is set, _send_email passes server_hostname to aiosmtplib."""
+        from openssl_encrypt_server.core.email import EmailService
+
+        service = EmailService(
+            smtp_host="192.168.1.50",
+            smtp_port=2525,
+            smtp_use_tls=True,
+            smtp_verify_tls=True,
+            smtp_tls_hostname="mail.example.com",
+            from_address="noreply@example.com",
+        )
+
+        with patch("openssl_encrypt_server.core.email.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+            await service._send_email("user@example.com", "Test", "<p>test</p>")
+
+            mock_send.assert_called_once()
+            call_kwargs = mock_send.call_args[1]
+            assert call_kwargs.get("server_hostname") == "mail.example.com"
+            # Should NOT disable verification
+            if "tls_context" in call_kwargs:
+                import ssl
+                assert call_kwargs["tls_context"].check_hostname is not False
+
+    @pytest.mark.asyncio
+    async def test_no_tls_hostname_does_not_set_server_hostname(self):
+        """When smtp_tls_hostname is None, server_hostname is not passed."""
+        from openssl_encrypt_server.core.email import EmailService
+
+        service = EmailService(
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            smtp_use_tls=True,
+            smtp_verify_tls=True,
+            from_address="noreply@example.com",
+        )
+
+        with patch("openssl_encrypt_server.core.email.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+            await service._send_email("user@example.com", "Test", "<p>test</p>")
+
+            call_kwargs = mock_send.call_args[1]
+            assert "server_hostname" not in call_kwargs
+
+
+class TestSmtpTlsVerifyGuardrail:
+    """Tests for SMTP_VERIFY_TLS=false requiring ALLOW_INSECURE_DEFAULTS (#8)."""
+
+    def test_verify_tls_false_without_insecure_defaults_raises(self):
+        """Disabling TLS verification without ALLOW_INSECURE_DEFAULTS must raise."""
+        from openssl_encrypt_server.config import Settings, validate_config
+
+        s = Settings(
+            keyserver_token_secret="a" * 48,
+            telemetry_token_secret="b" * 48,
+            postgres_password="strong_password_here",
+            keyserver_require_email_verification=True,
+            smtp_host="mail.example.com",
+            smtp_from_address="noreply@example.com",
+            keyserver_base_url="https://keys.example.com",
+            smtp_use_tls=True,
+            smtp_verify_tls=False,
+            allow_insecure_defaults=False,
+        )
+        with pytest.raises(ValueError, match="SMTP_VERIFY_TLS"):
+            validate_config(s)
+
+    def test_verify_tls_false_with_insecure_defaults_passes(self):
+        """Disabling TLS verification with ALLOW_INSECURE_DEFAULTS should pass."""
+        from openssl_encrypt_server.config import Settings, validate_config
+
+        s = Settings(
+            keyserver_token_secret="a" * 48,
+            telemetry_token_secret="b" * 48,
+            postgres_password="strong_password_here",
+            keyserver_require_email_verification=True,
+            smtp_host="mail.example.com",
+            smtp_from_address="noreply@example.com",
+            keyserver_base_url="https://keys.example.com",
+            smtp_use_tls=True,
+            smtp_verify_tls=False,
+            allow_insecure_defaults=True,
+        )
+        # Should not raise
+        validate_config(s)
+
+    def test_verify_tls_true_does_not_require_insecure_defaults(self):
+        """Normal TLS verification should not require ALLOW_INSECURE_DEFAULTS."""
+        from openssl_encrypt_server.config import Settings, validate_config
+
+        s = Settings(
+            keyserver_token_secret="a" * 48,
+            telemetry_token_secret="b" * 48,
+            postgres_password="strong_password_here",
+            keyserver_require_email_verification=True,
+            smtp_host="mail.example.com",
+            smtp_from_address="noreply@example.com",
+            keyserver_base_url="https://keys.example.com",
+            smtp_use_tls=True,
+            smtp_verify_tls=True,
+            allow_insecure_defaults=False,
+        )
+        # Should not raise
+        validate_config(s)
+
+    def test_verify_tls_false_logs_warning(self):
+        """Disabling TLS verification should log a security warning."""
+        from openssl_encrypt_server.config import Settings, validate_config
+
+        s = Settings(
+            keyserver_token_secret="a" * 48,
+            telemetry_token_secret="b" * 48,
+            postgres_password="strong_password_here",
+            smtp_use_tls=True,
+            smtp_verify_tls=False,
+            allow_insecure_defaults=True,
+        )
+        import logging
+        with patch.object(logging.getLogger("openssl_encrypt_server.config"), "warning") as mock_warn:
+            validate_config(s)
+            # Check that at least one warning mentions SMTP TLS
+            smtp_warnings = [
+                call for call in mock_warn.call_args_list
+                if "SMTP" in str(call) and "TLS" in str(call)
+            ]
+            assert len(smtp_warnings) >= 1
+
+    @pytest.mark.asyncio
+    async def test_verify_tls_false_logs_per_send_warning(self):
+        """Each send with verify_tls=False should log a warning."""
+        from openssl_encrypt_server.core.email import EmailService
+
+        service = EmailService(
+            smtp_host="192.168.1.50",
+            smtp_port=2525,
+            smtp_use_tls=True,
+            smtp_verify_tls=False,
+            from_address="noreply@example.com",
+        )
+
+        with patch("openssl_encrypt_server.core.email.aiosmtplib.send", new_callable=AsyncMock):
+            import logging
+            with patch.object(logging.getLogger("openssl_encrypt_server.core.email"), "warning") as mock_warn:
+                await service._send_email("user@example.com", "Test", "<p>test</p>")
+
+                smtp_warnings = [
+                    call for call in mock_warn.call_args_list
+                    if "TLS" in str(call) and "verification" in str(call).lower()
+                ]
+                assert len(smtp_warnings) >= 1
+
+
+class TestSmtpTlsHostnameInRoutes:
+    """Verify routes pass smtp_tls_hostname to EmailService."""
+
+    def test_routes_pass_tls_hostname_to_email_service(self):
+        """Routes source code must pass smtp_tls_hostname when constructing EmailService."""
+        from pathlib import Path
+        routes_path = Path(__file__).parent.parent / "modules" / "keyserver" / "routes.py"
+        with open(routes_path) as f:
+            source = f.read()
+        assert "smtp_tls_hostname" in source, \
+            "routes.py must pass smtp_tls_hostname to EmailService"

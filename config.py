@@ -233,6 +233,7 @@ class Settings(BaseSettings):
     smtp_password: Optional[str] = Field(default=None, validation_alias="SMTP_PASSWORD")
     smtp_use_tls: bool = Field(default=True, validation_alias="SMTP_USE_TLS")
     smtp_verify_tls: bool = Field(default=True, validation_alias="SMTP_VERIFY_TLS")
+    smtp_tls_hostname: Optional[str] = Field(default=None, validation_alias="SMTP_TLS_HOSTNAME")
     smtp_from_address: str = Field(default="", validation_alias="SMTP_FROM_ADDRESS")
 
     # SECURITY: Explicit opt-in to bypass security validation for local development ONLY.
@@ -482,6 +483,21 @@ def validate_config(settings: Settings):
                 "KEYSERVER_BASE_URL is required when KEYSERVER_REQUIRE_EMAIL_VERIFICATION is enabled. "
                 "Set the base URL for building confirmation links (e.g. https://keys.example.com)."
             )
+
+    # #8: SMTP TLS verification bypass guardrails
+    if settings.smtp_use_tls and not settings.smtp_verify_tls:
+        if not settings.allow_insecure_defaults:
+            raise ValueError(
+                "SMTP_VERIFY_TLS=false requires ALLOW_INSECURE_DEFAULTS=true. "
+                "Disabling TLS verification exposes SMTP traffic to MITM attacks. "
+                "If your SMTP server uses a self-signed cert, consider configuring "
+                "SMTP_TLS_HOSTNAME to override the SNI hostname instead."
+            )
+        logger.warning(
+            "SECURITY WARNING: SMTP TLS certificate verification is disabled. "
+            "SMTP connections are vulnerable to MITM attacks. "
+            "Only acceptable for local/LAN SMTP servers in trusted networks."
+        )
 
     # Validate pepper configuration
     if settings.pepper_enabled:

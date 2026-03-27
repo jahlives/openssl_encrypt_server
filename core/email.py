@@ -33,6 +33,7 @@ class EmailService:
         smtp_password: Optional[str] = None,
         smtp_use_tls: bool = True,
         smtp_verify_tls: bool = True,
+        smtp_tls_hostname: Optional[str] = None,
         from_address: str = "noreply@example.com",
     ):
         self.smtp_host = smtp_host
@@ -41,6 +42,7 @@ class EmailService:
         self.smtp_password = smtp_password
         self.smtp_use_tls = smtp_use_tls
         self.smtp_verify_tls = smtp_verify_tls
+        self.smtp_tls_hostname = smtp_tls_hostname
         self.from_address = from_address
 
     async def _send_email(self, to: str, subject: str, body_html: str) -> None:
@@ -64,10 +66,19 @@ class EmailService:
             "start_tls": self.smtp_use_tls,
         }
         if self.smtp_use_tls and not self.smtp_verify_tls:
+            logger.warning(
+                "SMTP TLS verification disabled — certificate not validated for %s:%d",
+                self.smtp_host,
+                self.smtp_port,
+            )
             tls_context = ssl.create_default_context()
             tls_context.check_hostname = False
             tls_context.verify_mode = ssl.CERT_NONE
             kwargs["tls_context"] = tls_context
+        elif self.smtp_use_tls and self.smtp_tls_hostname:
+            tls_context = ssl.create_default_context()
+            kwargs["tls_context"] = tls_context
+            kwargs["server_hostname"] = self.smtp_tls_hostname
         if self.smtp_username and self.smtp_password:
             kwargs["username"] = self.smtp_username
             kwargs["password"] = self.smtp_password
