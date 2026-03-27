@@ -148,12 +148,16 @@ class KeyserverService:
         await self.db.commit()
         return True
 
-    async def validate_confirmation_token(self, token: str) -> KSPendingRegistration:
+    async def validate_confirmation_token(self, token: str, secret: str = "") -> KSPendingRegistration:
         """
         Validate a confirmation token without creating the account.
 
+        Uses HMAC-indexed lookup + constant-time comparison to prevent
+        timing attacks on token values.
+
         Args:
             token: Confirmation token from email link
+            secret: Server token secret for HMAC computation
 
         Returns:
             KSPendingRegistration: The pending registration record
@@ -161,13 +165,14 @@ class KeyserverService:
         Raises:
             HTTPException: 404 if token not found, 410 if expired
         """
+        token_hmac = self.compute_client_id_hmac(secret, token)
         stmt = select(KSPendingRegistration).where(
-            KSPendingRegistration.confirmation_token == token
+            KSPendingRegistration.confirmation_token_hmac == token_hmac
         )
         result = await self.db.execute(stmt)
         pending = result.scalar_one_or_none()
 
-        if not pending:
+        if not pending or not hmac.compare_digest(pending.confirmation_token, token):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Invalid confirmation token",
@@ -202,7 +207,7 @@ class KeyserverService:
         Raises:
             HTTPException: 404 if token not found, 410 if expired
         """
-        pending = await self.validate_confirmation_token(token)
+        pending = await self.validate_confirmation_token(token, auth.secret)
 
         if pending.status == "confirmed":
             return {"client_id": pending.client_id}
@@ -663,7 +668,7 @@ class KeyserverService:
         }
 
     async def create_pending_registration(
-        self, email: str, base_url: str, email_service
+        self, email: str, base_url: str, email_service, secret: str = ""
     ) -> dict:
         """
         Create a pending registration and send a confirmation email.
@@ -672,6 +677,7 @@ class KeyserverService:
             email: Email address to register
             base_url: Base URL for confirmation link
             email_service: EmailService instance for sending emails
+            secret: Server token secret for computing HMAC indexes
 
         Returns:
             dict: Contains registration_id (opaque, always returned to prevent
@@ -702,10 +708,15 @@ class KeyserverService:
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(minutes=30)
 
+        confirmation_token_hmac = self.compute_client_id_hmac(secret, token)
+        registration_id_hmac = self.compute_client_id_hmac(secret, registration_id)
+
         if existing_pending:
             # Update existing pending registration with new token and expiry
             existing_pending.confirmation_token = token
+            existing_pending.confirmation_token_hmac = confirmation_token_hmac
             existing_pending.registration_id = registration_id
+            existing_pending.registration_id_hmac = registration_id_hmac
             existing_pending.status = "pending"
             existing_pending.client_id = None
             existing_pending.confirmed_at = None
@@ -716,7 +727,9 @@ class KeyserverService:
             pending = KSPendingRegistration(
                 email=email,
                 confirmation_token=token,
+                confirmation_token_hmac=confirmation_token_hmac,
                 registration_id=registration_id,
+                registration_id_hmac=registration_id_hmac,
                 created_at=now,
                 expires_at=expires_at,
             )
@@ -797,6 +810,9 @@ class KeyserverService:
         """
         Check the status of a pending registration (for polling).
 
+        Uses HMAC-indexed lookup + constant-time comparison for the
+        registration_id to prevent timing attacks.
+
         If confirmed, generates JWT tokens and deletes the pending record.
 
         Args:
@@ -809,13 +825,14 @@ class KeyserverService:
         Raises:
             HTTPException: 404 if registration_id not found
         """
+        regid_hmac = self.compute_client_id_hmac(auth.secret, registration_id)
         stmt = select(KSPendingRegistration).where(
-            KSPendingRegistration.registration_id == registration_id
+            KSPendingRegistration.registration_id_hmac == regid_hmac
         )
         result = await self.db.execute(stmt)
         pending = result.scalar_one_or_none()
 
-        if not pending:
+        if not pending or not hmac.compare_digest(pending.registration_id, registration_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Registration not found",

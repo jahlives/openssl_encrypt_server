@@ -285,6 +285,7 @@ class TestConfirmRegistrationWithPassword:
         pending = MagicMock()
         pending.status = "pending"
         pending.email = "user@example.com"
+        pending.confirmation_token = "valid_token"
         pending.expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
 
         mock_result = MagicMock()
@@ -316,6 +317,7 @@ class TestConfirmRegistrationWithPassword:
 
         pending = MagicMock()
         pending.status = "pending"
+        pending.confirmation_token = "expired_token"
         pending.expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
 
         mock_result = MagicMock()
@@ -323,6 +325,7 @@ class TestConfirmRegistrationWithPassword:
         mock_db.execute.return_value = mock_result
 
         mock_auth = MagicMock()
+        mock_auth.secret = "test_secret"
         mock_email = AsyncMock()
 
         with pytest.raises(HTTPException) as exc_info:
@@ -341,6 +344,7 @@ class TestConfirmRegistrationWithPassword:
         mock_db.execute.return_value = mock_result
 
         mock_auth = MagicMock()
+        mock_auth.secret = "test_secret"
         mock_email = AsyncMock()
 
         with pytest.raises(HTTPException) as exc_info:
@@ -355,12 +359,14 @@ class TestConfirmRegistrationWithPassword:
         pending = MagicMock()
         pending.status = "confirmed"
         pending.client_id = "existing_client_id"
+        pending.confirmation_token = "valid_token"
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = pending
         mock_db.execute.return_value = mock_result
 
         mock_auth = MagicMock()
+        mock_auth.secret = "test_secret"
         mock_email = AsyncMock()
 
         result = await service.confirm_registration_with_password(
@@ -391,13 +397,14 @@ class TestValidateConfirmationToken:
 
         pending = MagicMock()
         pending.status = "pending"
+        pending.confirmation_token = "valid_token"
         pending.expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = pending
         mock_db.execute.return_value = mock_result
 
-        result = await service.validate_confirmation_token("valid_token")
+        result = await service.validate_confirmation_token("valid_token", "test_secret")
         assert result == pending
 
     @pytest.mark.asyncio
@@ -410,7 +417,7 @@ class TestValidateConfirmationToken:
         mock_db.execute.return_value = mock_result
 
         with pytest.raises(HTTPException) as exc_info:
-            await service.validate_confirmation_token("bad_token")
+            await service.validate_confirmation_token("bad_token", "test_secret")
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -422,6 +429,7 @@ class TestValidateConfirmationToken:
 
         pending = MagicMock()
         pending.status = "pending"
+        pending.confirmation_token = "expired_token"
         pending.expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
 
         mock_result = MagicMock()
@@ -429,7 +437,7 @@ class TestValidateConfirmationToken:
         mock_db.execute.return_value = mock_result
 
         with pytest.raises(HTTPException) as exc_info:
-            await service.validate_confirmation_token("expired_token")
+            await service.validate_confirmation_token("expired_token", "test_secret")
         assert exc_info.value.status_code == 410
 
 

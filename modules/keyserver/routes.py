@@ -248,8 +248,9 @@ async def register_email(
         from_address=settings.smtp_from_address,
     )
 
+    auth = get_keyserver_auth()
     result = await service.create_pending_registration(
-        body.email, settings.keyserver_base_url, email_service
+        body.email, settings.keyserver_base_url, email_service, auth.secret
     )
 
     return EmailRegisterResponse(
@@ -292,11 +293,12 @@ async def confirm_registration(
     """
     service = KeyserverService(db)
 
+    auth = get_keyserver_auth()
     accept = request.headers.get("accept", "")
     is_browser = "text/html" in accept
 
     try:
-        pending = await service.validate_confirmation_token(token)
+        pending = await service.validate_confirmation_token(token, auth.secret)
     except HTTPException as e:
         if is_browser:
             return HTMLResponse(

@@ -51,9 +51,9 @@ class TestKSPendingRegistrationModel:
         col = KSPendingRegistration.__table__.columns["registration_id"]
         assert col.unique is True
 
-    def test_registration_id_column_is_indexed(self):
-        """Registration ID column is indexed for fast polling."""
-        col = KSPendingRegistration.__table__.columns["registration_id"]
+    def test_registration_id_hmac_column_is_indexed(self):
+        """Registration ID HMAC column is indexed for constant-time lookup."""
+        col = KSPendingRegistration.__table__.columns["registration_id_hmac"]
         assert col.index is True
 
     def test_table_name(self):
@@ -75,9 +75,9 @@ class TestKSPendingRegistrationModel:
         email_col = KSPendingRegistration.__table__.columns["email"]
         assert email_col.index is True
 
-    def test_confirmation_token_column_is_indexed(self):
-        """Confirmation token column is indexed for fast lookup."""
-        token_col = KSPendingRegistration.__table__.columns["confirmation_token"]
+    def test_confirmation_token_hmac_column_is_indexed(self):
+        """Confirmation token HMAC column is indexed for constant-time lookup."""
+        token_col = KSPendingRegistration.__table__.columns["confirmation_token_hmac"]
         assert token_col.index is True
 
 
@@ -826,6 +826,71 @@ class TestEmailHtmlEscaping:
 
 
 # ---------------------------------------------------------------------------
+# Constant-Time Token Lookup Tests (Finding #6)
+# ---------------------------------------------------------------------------
+
+
+class TestConstantTimeTokenLookup:
+    """Verify confirmation_token and registration_id use HMAC-indexed lookup (#6)."""
+
+    def test_pending_registration_has_token_hmac_column(self):
+        """KSPendingRegistration must have confirmation_token_hmac column."""
+        from openssl_encrypt_server.modules.keyserver.models import KSPendingRegistration
+
+        assert hasattr(KSPendingRegistration, "confirmation_token_hmac")
+
+    def test_pending_registration_has_regid_hmac_column(self):
+        """KSPendingRegistration must have registration_id_hmac column."""
+        from openssl_encrypt_server.modules.keyserver.models import KSPendingRegistration
+
+        assert hasattr(KSPendingRegistration, "registration_id_hmac")
+
+    def test_validate_token_uses_hmac_compare(self):
+        """validate_confirmation_token must use hmac.compare_digest."""
+        from pathlib import Path
+        service_path = Path(__file__).parent.parent / "modules" / "keyserver" / "service.py"
+        with open(service_path) as f:
+            source = f.read()
+        # Find the validate_confirmation_token method and check for constant-time compare
+        idx = source.index("async def validate_confirmation_token")
+        method_end = source.index("\n    async def ", idx + 1)
+        method_body = source[idx:method_end]
+        assert "hmac.compare_digest" in method_body, \
+            "validate_confirmation_token must use constant-time comparison"
+
+    def test_check_registration_status_uses_hmac_compare(self):
+        """check_registration_status must use hmac.compare_digest."""
+        from pathlib import Path
+        service_path = Path(__file__).parent.parent / "modules" / "keyserver" / "service.py"
+        with open(service_path) as f:
+            source = f.read()
+        idx = source.index("async def check_registration_status")
+        # Get a reasonable chunk of the method body
+        method_body = source[idx:idx + 1500]
+        assert "hmac.compare_digest" in method_body, \
+            "check_registration_status must use constant-time comparison"
+
+    def test_create_pending_stores_token_hmac(self):
+        """create_pending_registration must compute and store token HMAC."""
+        from pathlib import Path
+        service_path = Path(__file__).parent.parent / "modules" / "keyserver" / "service.py"
+        with open(service_path) as f:
+            source = f.read()
+        idx = source.index("async def create_pending_registration")
+        method_body = source[idx:idx + 2000]
+        assert "confirmation_token_hmac" in method_body, \
+            "create_pending_registration must store confirmation_token_hmac"
+        assert "registration_id_hmac" in method_body, \
+            "create_pending_registration must store registration_id_hmac"
+
+    def test_migration_006_exists(self):
+        """Migration 006 for token HMAC columns must exist."""
+        from pathlib import Path
+        migration_path = Path(__file__).parent.parent / "migrations" / "006_token_hmac.sql"
+        assert migration_path.exists(), "Migration 006_token_hmac.sql must exist"
+
+
+# ---------------------------------------------------------------------------
 # Registration Status Polling Tests
 # ---------------------------------------------------------------------------
 
@@ -851,6 +916,7 @@ class TestCheckRegistrationStatus:
         """Status returns 'pending' when registration not yet confirmed."""
         pending = MagicMock()
         pending.status = "pending"
+        pending.registration_id = "reg_id_123"
         pending.expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
 
         mock_result = MagicMock()
@@ -858,6 +924,7 @@ class TestCheckRegistrationStatus:
         mock_db.execute.return_value = mock_result
 
         mock_auth = MagicMock()
+        mock_auth.secret = "test_secret"
         result = await service.check_registration_status("reg_id_123", mock_auth)
 
         assert result["status"] == "pending"
@@ -869,12 +936,14 @@ class TestCheckRegistrationStatus:
         pending = MagicMock()
         pending.status = "confirmed"
         pending.client_id = "client_abc123"
+        pending.registration_id = "reg_id_123"
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = pending
         mock_db.execute.return_value = mock_result
 
         mock_auth = MagicMock()
+        mock_auth.secret = "test_secret"
         mock_auth.create_token_pair.return_value = {
             "access_token": "tok_access",
             "refresh_token": "tok_refresh",
@@ -897,12 +966,14 @@ class TestCheckRegistrationStatus:
         pending = MagicMock()
         pending.status = "confirmed"
         pending.client_id = "client_abc123"
+        pending.registration_id = "reg_id_123"
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = pending
         mock_db.execute.return_value = mock_result
 
         mock_auth = MagicMock()
+        mock_auth.secret = "test_secret"
         mock_auth.create_token_pair.return_value = {
             "access_token": "tok", "refresh_token": "ref",
             "access_token_expires_at": "x", "refresh_token_expires_at": "x",
@@ -923,6 +994,7 @@ class TestCheckRegistrationStatus:
         mock_db.execute.return_value = mock_result
 
         mock_auth = MagicMock()
+        mock_auth.secret = "test_secret"
 
         with pytest.raises(HTTPException) as exc_info:
             await service.check_registration_status("nonexistent", mock_auth)
@@ -935,6 +1007,7 @@ class TestCheckRegistrationStatus:
 
         pending = MagicMock()
         pending.status = "pending"
+        pending.registration_id = "expired_reg"
         pending.expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
 
         mock_result = MagicMock()
@@ -942,6 +1015,7 @@ class TestCheckRegistrationStatus:
         mock_db.execute.return_value = mock_result
 
         mock_auth = MagicMock()
+        mock_auth.secret = "test_secret"
 
         with pytest.raises(HTTPException) as exc_info:
             await service.check_registration_status("expired_reg", mock_auth)
