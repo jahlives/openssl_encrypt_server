@@ -113,7 +113,11 @@ def create_app() -> FastAPI:
     try:
         validate_config(settings)
     except ValueError as e:
-        logger.error("Configuration error: %s", e)
+        import sys
+        msg = f"CONFIGURATION ERROR: {e}"
+        logger.error(msg)
+        logging.shutdown()
+        print(msg, file=sys.stderr, flush=True)
         raise SystemExit(1)
 
     app = FastAPI(
