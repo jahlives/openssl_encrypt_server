@@ -5,6 +5,7 @@ Async email service for sending confirmation and welcome emails.
 Uses aiosmtplib for non-blocking SMTP communication.
 """
 
+import html as html_mod
 import logging
 import ssl
 from email.mime.multipart import MIMEMultipart
@@ -85,7 +86,9 @@ class EmailService:
             token: Confirmation token
             base_url: Base URL for building the confirmation link
         """
-        confirm_url = f"{base_url.rstrip('/')}/api/v1/keys/confirm/{token}"
+        safe_base_url = html_mod.escape(base_url.rstrip('/'))
+        safe_token = html_mod.escape(token)
+        confirm_url = f"{safe_base_url}/api/v1/keys/confirm/{safe_token}"
 
         body = f"""\
 <html>
@@ -108,13 +111,15 @@ class EmailService:
             email: Recipient email address
             client_id: The assigned client identifier for the keyserver plugin
         """
+        safe_client_id = html_mod.escape(client_id)
+
         body = f"""\
 <html>
 <body>
 <h2>Keyserver Registration Complete</h2>
 <p>Your account has been successfully activated.</p>
 <p>Your client ID is:</p>
-<pre style="background: #f4f4f4; padding: 12px; font-size: 16px;">{client_id}</pre>
+<pre style="background: #f4f4f4; padding: 12px; font-size: 16px;">{safe_client_id}</pre>
 <p>Add this client ID to your keyserver plugin configuration.</p>
 <p><strong>Keep this ID safe.</strong> You will need it to authenticate with the keyserver.</p>
 </body>

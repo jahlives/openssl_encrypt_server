@@ -705,6 +705,92 @@ class TestEmailService:
             assert "30" in body  # mentions 30 minutes
 
 
+class TestEmailHtmlEscaping:
+    """Tests for HTML escaping in email templates (finding #7)."""
+
+    @pytest.mark.asyncio
+    async def test_welcome_email_escapes_client_id(self):
+        """send_welcome_email HTML-escapes client_id to prevent injection."""
+        from openssl_encrypt_server.core.email import EmailService
+
+        service = EmailService(
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            from_address="noreply@example.com",
+        )
+
+        malicious_id = '<script>alert("xss")</script>'
+
+        with patch.object(service, "_send_email", new_callable=AsyncMock) as mock_send:
+            await service.send_welcome_email("user@example.com", malicious_id)
+
+            body = mock_send.call_args[0][2]
+            assert "<script>" not in body
+            assert "&lt;script&gt;" in body
+
+    @pytest.mark.asyncio
+    async def test_confirmation_email_escapes_base_url(self):
+        """send_confirmation_email HTML-escapes base_url to prevent injection."""
+        from openssl_encrypt_server.core.email import EmailService
+
+        service = EmailService(
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            from_address="noreply@example.com",
+        )
+
+        malicious_url = 'https://evil.com"><script>alert(1)</script><a href="'
+
+        with patch.object(service, "_send_email", new_callable=AsyncMock) as mock_send:
+            await service.send_confirmation_email(
+                "user@example.com", "safe_token", malicious_url
+            )
+
+            body = mock_send.call_args[0][2]
+            assert "<script>" not in body
+            assert "&lt;script&gt;" in body
+
+    @pytest.mark.asyncio
+    async def test_confirmation_email_escapes_token(self):
+        """send_confirmation_email HTML-escapes token to prevent injection."""
+        from openssl_encrypt_server.core.email import EmailService
+
+        service = EmailService(
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            from_address="noreply@example.com",
+        )
+
+        malicious_token = '"><script>alert(1)</script>'
+
+        with patch.object(service, "_send_email", new_callable=AsyncMock) as mock_send:
+            await service.send_confirmation_email(
+                "user@example.com", malicious_token, "https://keys.example.com"
+            )
+
+            body = mock_send.call_args[0][2]
+            assert "<script>" not in body
+
+    @pytest.mark.asyncio
+    async def test_welcome_email_preserves_safe_values(self):
+        """HTML escaping does not corrupt normal hex client_ids."""
+        from openssl_encrypt_server.core.email import EmailService
+
+        service = EmailService(
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            from_address="noreply@example.com",
+        )
+
+        safe_id = "abc123def456"
+
+        with patch.object(service, "_send_email", new_callable=AsyncMock) as mock_send:
+            await service.send_welcome_email("user@example.com", safe_id)
+
+            body = mock_send.call_args[0][2]
+            assert safe_id in body
+
+
 # ---------------------------------------------------------------------------
 # Registration Status Polling Tests
 # ---------------------------------------------------------------------------
