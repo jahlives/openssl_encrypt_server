@@ -535,9 +535,11 @@ The revocation signature is created by signing the fingerprint string with the k
 |--------|-----------|--------|
 | 400 | Invalid revocation signature | `"Invalid revocation signature: ..."` |
 | 401 | Missing or invalid JWT token | `"Authorization required"` |
+| 403 | Authenticated client is not the key owner | `"Not authorized to revoke this key"` |
 | 404 | Key not found | `"Key not found"` |
 
 **Notes:**
+- The authenticated client must be the key's owner (`owner_client_id`). Keys with no owner set (legacy uploads) can be revoked by any authenticated client with a valid signature.
 - Revoked keys are marked but not deleted
 - Revoked keys are excluded from search results
 - Re-uploading a revoked key un-revokes it

@@ -634,6 +634,18 @@ class KeyserverService:
                 "message": "Key already revoked",
             }
 
+        # Defense-in-depth: verify the requesting client owns this key (#11)
+        if key.owner_client_id and key.owner_client_id != client_id:
+            logger.warning(
+                "Revocation denied: client %s is not the owner of key %s",
+                client_id[:8],
+                fingerprint[:20],
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to revoke this key",
+            )
+
         # Parse bundle to get signing public key
         bundle_data = json.loads(key.bundle_json)
 
