@@ -235,7 +235,7 @@ class KeyserverService:
         # Send welcome email with client_id
         await email_service.send_welcome_email(pending.email, client_id)
 
-        logger.info(f"Registration confirmed for {pending.email}, client_id: {client_id[:8]}...")
+        logger.info("Registration confirmed for %s, client_id: %s...", pending.email, client_id[:8])
 
         return {"client_id": client_id}
 
@@ -308,7 +308,7 @@ class KeyserverService:
 
         count = result.rowcount
         if count > 0:
-            logger.info(f"Cleaned up {count} expired/used challenges")
+            logger.info("Cleaned up %d expired/used challenges", count)
         return count
 
     async def upload_key(
@@ -383,7 +383,7 @@ class KeyserverService:
                 signing_algorithm=bundle.signing_algorithm,
             )
         except (VerificationError, ValueError) as e:
-            logger.error(f"PoP verification failed for client {client_id[:8]}...: {e}")
+            logger.error("PoP verification failed for client %s...: %s", client_id[:8], e)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Proof of Possession verification failed",
@@ -395,10 +395,10 @@ class KeyserverService:
             bundle_dict = bundle.model_dump(exclude={"challenge_id", "pop_signature"})
             verify_bundle_signature(bundle_dict)
         except (VerificationError, FingerprintMismatchError) as e:
-            logger.error(f"Bundle verification failed: {e}")
+            logger.error("Bundle verification failed: %s", e)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         except Exception as e:
-            logger.error(f"Unexpected verification error: {e}")
+            logger.error("Unexpected verification error: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Verification failed"
             )
@@ -432,14 +432,14 @@ class KeyserverService:
         if existing_key:
             if not existing_key.revoked:
                 # Key exists and is not revoked - return conflict
-                logger.info(f"Key already exists: {bundle.fingerprint}")
+                logger.info("Key already exists: %s", bundle.fingerprint)
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Key with fingerprint {bundle.fingerprint} already exists",
                 )
             else:
                 # Key was revoked - allow re-upload (un-revoke)
-                logger.info(f"Re-uploading previously revoked key: {bundle.fingerprint}")
+                logger.info("Re-uploading previously revoked key: %s", bundle.fingerprint)
                 existing_key.bundle_json = json.dumps(bundle_dict)
                 existing_key.name = bundle.name
                 existing_key.email = bundle.email
@@ -514,7 +514,7 @@ class KeyserverService:
         Raises:
             HTTPException: If key not found
         """
-        logger.info(f"Search request for: '{query}'")
+        logger.info("Search request for: '%s'", query)
 
         # Search by fingerprint, name, or email
         stmt = (
@@ -535,7 +535,7 @@ class KeyserverService:
         keys = result.scalars().all()
 
         if len(keys) == 0:
-            logger.info(f"Key not found for query: '{query}'")
+            logger.info("Key not found for query: '%s'", query)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Key not found"
             )
@@ -544,7 +544,7 @@ class KeyserverService:
         for key in keys:
             await self._log_access(key.fingerprint, "search", client_id, ip_address)
 
-        logger.info(f"Found {len(keys)} key(s) for query: '{query}'")
+        logger.info("Found %d key(s) for query: '%s'", len(keys), query)
 
         return {
             "keys": [KeyBundleSchema(**json.loads(k.bundle_json)) for k in keys],
@@ -568,7 +568,7 @@ class KeyserverService:
         Raises:
             HTTPException: If key not found
         """
-        logger.info(f"Fingerprint lookup for: '{fingerprint}'")
+        logger.info("Fingerprint lookup for: '%s'", fingerprint)
 
         stmt = (
             select(KSKey)
@@ -579,7 +579,7 @@ class KeyserverService:
         key = result.scalar_one_or_none()
 
         if not key:
-            logger.info(f"Key not found for fingerprint: '{fingerprint}'")
+            logger.info("Key not found for fingerprint: '%s'", fingerprint)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Key not found"
             )
@@ -587,7 +587,7 @@ class KeyserverService:
         # Log access
         await self._log_access(key.fingerprint, "search", client_id, ip_address)
 
-        logger.info(f"Key found: {key.name} (fp: {key.fingerprint[:20]}...)")
+        logger.info("Key found: %s (fp: %s...)", key.name, key.fingerprint[:20])
 
         return {"key": KeyBundleSchema(**json.loads(key.bundle_json)), "message": "Key found"}
 
@@ -613,7 +613,7 @@ class KeyserverService:
         Raises:
             HTTPException: If key not found or signature invalid
         """
-        logger.info(f"Revocation request for fingerprint: {fingerprint[:20]}...")
+        logger.info("Revocation request for fingerprint: %s...", fingerprint[:20])
 
         # Find key
         stmt = select(KSKey).where(KSKey.fingerprint == fingerprint)
@@ -621,13 +621,13 @@ class KeyserverService:
         key = result.scalar_one_or_none()
 
         if not key:
-            logger.error(f"Key not found for revocation: {fingerprint}")
+            logger.error("Key not found for revocation: %s", fingerprint)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Key not found"
             )
 
         if key.revoked:
-            logger.info(f"Key already revoked: {fingerprint}")
+            logger.info("Key already revoked: %s", fingerprint)
             return {
                 "success": True,
                 "fingerprint": fingerprint,
@@ -658,7 +658,7 @@ class KeyserverService:
                 signing_algorithm=bundle_data["signing_algorithm"],
             )
         except VerificationError as e:
-            logger.error(f"Revocation signature verification failed: {e}")
+            logger.error("Revocation signature verification failed: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid revocation signature: {e}",
@@ -672,7 +672,7 @@ class KeyserverService:
         # Log access
         await self._log_access(fingerprint, "revoke", client_id, ip_address)
 
-        logger.info(f"Key revoked successfully: {fingerprint}")
+        logger.info("Key revoked successfully: %s", fingerprint)
 
         return {
             "success": True,
@@ -763,7 +763,7 @@ class KeyserverService:
         # Send confirmation email
         await email_service.send_confirmation_email(email, token, base_url)
 
-        logger.info(f"Pending registration created for {email}")
+        logger.info("Pending registration created for %s", email)
         return {"registration_id": registration_id, "token": token}
 
     async def confirm_registration(
@@ -823,7 +823,7 @@ class KeyserverService:
         # Send welcome email with client_id
         await email_service.send_welcome_email(pending.email, client_id)
 
-        logger.info(f"Registration confirmed for {pending.email}, client_id: {client_id[:8]}...")
+        logger.info("Registration confirmed for %s, client_id: %s...", pending.email, client_id[:8])
 
         return {"client_id": client_id}
 
@@ -905,7 +905,7 @@ class KeyserverService:
 
         count = result.rowcount
         if count > 0:
-            logger.info(f"Cleaned up {count} expired/old pending registrations")
+            logger.info("Cleaned up %d expired/old pending registrations", count)
         return count
 
     async def _log_access(

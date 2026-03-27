@@ -84,7 +84,7 @@ class EmailService:
             kwargs["password"] = self.smtp_password
 
         await aiosmtplib.send(msg, **kwargs)
-        logger.info(f"Email sent to {to}: {subject}")
+        logger.info("Email sent to %s: %s", to, subject)
 
     async def send_confirmation_email(
         self, email: str, token: str, base_url: str
