@@ -1353,3 +1353,86 @@ class TestSmtpTlsHostnameInRoutes:
             source = f.read()
         assert "smtp_tls_hostname" in source, \
             "routes.py must pass smtp_tls_hostname to EmailService"
+
+
+# ---------------------------------------------------------------------------
+# Finding #9 — Race Condition in Email Registration
+# ---------------------------------------------------------------------------
+
+
+class TestRegistrationRaceCondition:
+    """Tests for IntegrityError handling in create_pending_registration (#9)."""
+
+    @pytest.fixture
+    def mock_db(self):
+        db = AsyncMock()
+        db.add = MagicMock()
+        db.commit = AsyncMock()
+        db.execute = AsyncMock()
+        db.rollback = AsyncMock()
+        return db
+
+    @pytest.fixture
+    def service(self, mock_db):
+        from openssl_encrypt_server.modules.keyserver.service import KeyserverService
+        return KeyserverService(mock_db)
+
+    @pytest.mark.asyncio
+    async def test_integrity_error_returns_opaque_response(self, service, mock_db):
+        """Concurrent duplicate email insert must return opaque 202, not 500."""
+        from sqlalchemy.exc import IntegrityError
+
+        # First execute: no existing client
+        # Second execute: no existing pending
+        mock_result_none = MagicMock()
+        mock_result_none.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result_none
+
+        # commit raises IntegrityError (concurrent insert won the race)
+        mock_db.commit.side_effect = IntegrityError(
+            "duplicate key", params=None, orig=Exception("unique constraint")
+        )
+
+        mock_email_service = AsyncMock()
+
+        # Should NOT raise — should return opaque response
+        result = await service.create_pending_registration(
+            "user@example.com", "https://keys.example.com", mock_email_service, "test_secret"
+        )
+
+        assert "registration_id" in result
+        mock_db.rollback.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_integrity_error_does_not_send_confirmation_email(self, service, mock_db):
+        """On IntegrityError, confirmation email must NOT be sent."""
+        from sqlalchemy.exc import IntegrityError
+
+        mock_result_none = MagicMock()
+        mock_result_none.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result_none
+        mock_db.commit.side_effect = IntegrityError(
+            "duplicate key", params=None, orig=Exception("unique constraint")
+        )
+
+        mock_email_service = AsyncMock()
+
+        await service.create_pending_registration(
+            "user@example.com", "https://keys.example.com", mock_email_service, "test_secret"
+        )
+
+        mock_email_service.send_confirmation_email.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_service_code_catches_integrity_error(self):
+        """The service source must handle IntegrityError in create_pending_registration."""
+        from pathlib import Path
+        service_path = Path(__file__).parent.parent / "modules" / "keyserver" / "service.py"
+        with open(service_path) as f:
+            source = f.read()
+        idx = source.index("async def create_pending_registration")
+        # Find the next method
+        next_method = source.index("\n    async def ", idx + 1)
+        method_body = source[idx:next_method]
+        assert "IntegrityError" in method_body, \
+            "create_pending_registration must catch IntegrityError for race condition handling"

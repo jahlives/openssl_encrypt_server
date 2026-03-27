@@ -252,12 +252,11 @@ POST /api/v1/keys/register/email
 
 **Errors:**
 
-| Status | Condition | Detail |
-|--------|-----------|--------|
-| 409 | Email already registered | `"An account with this email already exists"` |
-
 **Notes:**
+- All responses return `202 Accepted` with a `registration_id` regardless of whether the email is new, already pending, or already registered — this prevents email enumeration
 - If a pending registration exists for the same email, it is replaced (new token, new expiry)
+- If the email is already registered, a notification email is sent to the existing account holder instead
+- Concurrent duplicate requests are handled gracefully (no 500 errors)
 - The `registration_id` is used to poll for completion via the status endpoint
 
 ---

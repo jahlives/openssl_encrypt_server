@@ -18,6 +18,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from fastapi import HTTPException, status
 from sqlalchemy import delete, or_, select, update as sa_update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import KSAccessLog, KSChallenge, KSClient, KSKey, KSPendingRegistration
@@ -735,7 +736,17 @@ class KeyserverService:
             )
             self.db.add(pending)
 
-        await self.db.commit()
+        try:
+            await self.db.commit()
+        except IntegrityError:
+            # Race condition: concurrent request inserted the same email (#9).
+            # Return opaque response to prevent email enumeration.
+            await self.db.rollback()
+            logger.info("Registration race condition handled (opaque response returned)")
+            return {
+                "registration_id": secrets.token_urlsafe(32),
+                "token": secrets.token_urlsafe(32),
+            }
 
         # Send confirmation email
         await email_service.send_confirmation_email(email, token, base_url)
