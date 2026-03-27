@@ -12,34 +12,12 @@
      - [x] **#5 HIGH** — Email enumeration via 409 on registration → `5064aa4` (opaque 202 response)
      - [x] **#6 HIGH** — Confirmation token lookup not constant-time → `582539b` (HMAC-indexed lookup)
      - [x] **#7 HIGH** — Email HTML injection in templates → `ba19b08` (html.escape on all values)
+     - [x] **#8 MEDIUM** — SMTP TLS verification bypass lacks guardrails → `b96eba6` (require ALLOW_INSECURE_DEFAULTS, add SMTP_TLS_HOSTNAME)
+     - [x] **#9 MEDIUM** — Race condition in email registration → `2c22320` (catch IntegrityError, return opaque 202)
+     - [x] **#10 MEDIUM** — Confirmed registration tokens delivered only once → `e38a4cd` (documented recovery via /login)
+     - [x] **#11 MEDIUM** — No owner check on key revocation → `81b1581` (owner_client_id check before signature verification)
+     - [x] **#12 LOW** — Log injection via email address → `ea37c4b` (parameterized logging in service.py and email.py)
 
      ## Remaining
 
-     ### MEDIUM
-
-     #### #8 — SMTP TLS verification bypass lacks guardrails
-     - **Location:** `config.py`, `core/email.py:71-74`
-     - **Issue:** `SMTP_VERIFY_TLS=false` disables hostname and cert verification. No warning logged, no requirement that `ALLOW_INSECURE_DEFAULTS=true` is also set.
-     - **Recommendation:** Log security warning when `smtp_verify_tls=False`. Consider requiring `ALLOW_INSECURE_DEFAULTS=true` to use it.
-
-     #### #9 — Race condition in email registration
-     - **Location:** `service.py` `create_pending_registration`
-     - **Issue:** Check-then-act between checking for existing client/pending and insert is not atomic. Concurrent requests with same email → DB unique constraint violation (500) instead of opaque 202.
-     - **Recommendation:** Catch `IntegrityError` and return opaque 202, or use `INSERT ... ON CONFLICT`.
-
-     #### #10 — Confirmed registration tokens delivered only once
-     - **Location:** `service.py` `check_registration_status`
-     - **Issue:** On confirmation, tokens are issued and pending record deleted. Network drop before response = tokens lost, record gone. User has account but no tokens.
-     - **Recommendation:** Acceptable since `/login` endpoint exists as recovery path. Document this.
-
-     #### #11 — No owner check on key revocation
-     - **Location:** `service.py` `revoke_key`
-     - **Issue:** Any authenticated client can revoke any key if they provide a valid revocation signature. No check that `client_id == key.owner_client_id`. Cryptographic signature provides strong protection, but defense-in-depth would check ownership too.
-     - **Recommendation:** Add `if key.owner_client_id and key.owner_client_id != client_id: raise 403` check.
-
-     ### LOW
-
-     #### #12 — Log injection via email address
-     - **Location:** `service.py:357` — `logger.info(f"Pending registration created for {email}")`
-     - **Issue:** Pydantic's `EmailStr` limits this, but structured logging would be safer.
-     - **Recommendation:** Use structured logging with explicit fields instead of f-string interpolation.
+     All findings have been addressed.
