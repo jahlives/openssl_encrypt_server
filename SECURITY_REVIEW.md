@@ -24,8 +24,8 @@
 
      #### #9 — Race condition in email registration
      - **Location:** `service.py` `create_pending_registration`
-     - **Issue:** Check-then-act between checking for existing client/pending and insert is not atomic. Concurrent requests with same email → DB unique constraint violation (500) instead of clean 409.
-     - **Recommendation:** Catch `IntegrityError` and return 409, or use `INSERT ... ON CONFLICT`.
+     - **Issue:** Check-then-act between checking for existing client/pending and insert is not atomic. Concurrent requests with same email → DB unique constraint violation (500) instead of opaque 202.
+     - **Recommendation:** Catch `IntegrityError` and return opaque 202, or use `INSERT ... ON CONFLICT`.
 
      #### #10 — Confirmed registration tokens delivered only once
      - **Location:** `service.py` `check_registration_status`
