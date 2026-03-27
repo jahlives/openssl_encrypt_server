@@ -391,5 +391,55 @@ class TestLoginEndpointSchema(unittest.TestCase):
                        "Client lookup must use constant-time comparison")
 
 
+class TestRegistrationSecretConstantTime(unittest.TestCase):
+    """Registration secret comparison must use constant-time comparison to prevent timing attacks."""
+
+    def test_keyserver_register_uses_hmac_compare_digest(self):
+        """Keyserver register must use hmac.compare_digest for secret comparison."""
+        routes_path = Path(__file__).parent.parent / "modules" / "keyserver" / "routes.py"
+        with open(routes_path) as f:
+            source = f.read()
+        # Find the register function body
+        reg_idx = source.index("async def register(")
+        # Find the next function definition to delimit the register function body
+        next_func = source.index("\nasync def ", reg_idx + 1)
+        register_source = source[reg_idx:next_func]
+        self.assertIn("hmac.compare_digest", register_source,
+                       "Registration secret comparison must use hmac.compare_digest, "
+                       "not == operator, to prevent timing attacks")
+
+    def test_keyserver_register_does_not_use_equality_for_secret(self):
+        """Keyserver register must NOT use == to compare registration secret."""
+        routes_path = Path(__file__).parent.parent / "modules" / "keyserver" / "routes.py"
+        with open(routes_path) as f:
+            source = f.read()
+        reg_idx = source.index("async def register(")
+        next_func = source.index("\nasync def ", reg_idx + 1)
+        register_source = source[reg_idx:next_func]
+        self.assertNotIn(
+            "x_registration_secret != settings.registration_secret",
+            register_source,
+            "Must not use != operator for secret comparison (timing attack vulnerable)")
+
+    def test_keyserver_routes_imports_hmac(self):
+        """Keyserver routes must import hmac for constant-time comparison."""
+        routes_path = Path(__file__).parent.parent / "modules" / "keyserver" / "routes.py"
+        with open(routes_path) as f:
+            source = f.read()
+        self.assertIn("import hmac", source,
+                       "routes.py must import hmac for constant-time secret comparison")
+
+    def test_telemetry_register_uses_hmac_compare_digest(self):
+        """Telemetry register must use hmac.compare_digest for secret comparison if it checks the secret."""
+        routes_path = Path(__file__).parent.parent / "modules" / "telemetry" / "routes.py"
+        with open(routes_path) as f:
+            source = f.read()
+        # If telemetry register checks registration_secret, it must use constant-time comparison
+        if "registration_secret" in source:
+            self.assertIn("hmac.compare_digest", source,
+                           "Registration secret comparison must use hmac.compare_digest, "
+                           "not == operator, to prevent timing attacks")
+
+
 if __name__ == "__main__":
     unittest.main()

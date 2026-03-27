@@ -10,6 +10,7 @@ Endpoints:
 - POST /api/v1/keys/{fingerprint}/revoke - Revoke key (auth required)
 """
 
+import hmac
 import logging
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, Security, status
@@ -94,7 +95,7 @@ async def register(
         RegisterResponse: Client ID, JWT token, expiration
     """
     if settings.registration_secret:
-        if not x_registration_secret or x_registration_secret != settings.registration_secret:
+        if not x_registration_secret or not hmac.compare_digest(x_registration_secret, settings.registration_secret):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Invalid or missing registration secret",
