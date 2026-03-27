@@ -272,7 +272,8 @@ Required when `KEYSERVER_REQUIRE_EMAIL_VERIFICATION=true`.
 | `SMTP_USERNAME` | str | *none* | SMTP authentication username |
 | `SMTP_PASSWORD` | str | *none* | SMTP authentication password |
 | `SMTP_USE_TLS` | bool | `true` | Use STARTTLS for SMTP connection |
-| `SMTP_VERIFY_TLS` | bool | `true` | Verify TLS certificate (set `false` for internal servers with self-signed certs) |
+| `SMTP_VERIFY_TLS` | bool | `true` | Verify TLS certificate. Requires `ALLOW_INSECURE_DEFAULTS=true` to disable |
+| `SMTP_TLS_HOSTNAME` | str | *none* | Override TLS SNI/hostname verification (use when connecting via LAN IP to a server with a valid domain cert) |
 | `SMTP_FROM_ADDRESS` | str | `""` | Sender email address for confirmation/welcome emails |
 
 ### Example SMTP Configurations
@@ -289,15 +290,24 @@ SMTP_VERIFY_TLS=true
 SMTP_FROM_ADDRESS=your-email@gmail.com
 ```
 
-**Internal server (self-signed cert):**
+**Internal server via LAN IP (valid domain cert, e.g. LetsEncrypt):**
+
+```bash
+SMTP_HOST=192.168.1.50
+SMTP_PORT=2525
+SMTP_USE_TLS=true
+SMTP_TLS_HOSTNAME=mail.example.com
+SMTP_FROM_ADDRESS=keyserver@example.com
+```
+
+**Internal server (self-signed cert — last resort):**
 
 ```bash
 SMTP_HOST=10.0.0.22
 SMTP_PORT=2525
-SMTP_USERNAME=
-SMTP_PASSWORD=
 SMTP_USE_TLS=true
 SMTP_VERIFY_TLS=false
+ALLOW_INSECURE_DEFAULTS=true
 SMTP_FROM_ADDRESS=keyserver@internal.example.com
 ```
 
@@ -420,6 +430,7 @@ environment:
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
   SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
   SMTP_VERIFY_TLS: ${SMTP_VERIFY_TLS:-true}
+  SMTP_TLS_HOSTNAME: ${SMTP_TLS_HOSTNAME:-}
   SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-}
 
   # CORS
@@ -454,9 +465,10 @@ The server performs these checks at startup:
 3. **Database password**: Must be non-empty in production mode
 4. **TOTP key validation**: If pepper enabled, Fernet key must be exactly 44 characters
 5. **Email verification deps**: If email verification enabled, SMTP_HOST, SMTP_FROM_ADDRESS, and KEYSERVER_BASE_URL must be set
-6. **Database connection**: Connection pool initialized and tables created
-7. **liboqs check**: Post-quantum library availability verified (warning if unavailable)
-8. **Module loading**: Each enabled module loaded and registered
+6. **SMTP TLS guardrail**: If `SMTP_VERIFY_TLS=false`, requires `ALLOW_INSECURE_DEFAULTS=true`
+7. **Database connection**: Connection pool initialized and tables created
+8. **liboqs check**: Post-quantum library availability verified (warning if unavailable)
+9. **Module loading**: Each enabled module loaded and registered
 
 If any required validation fails, the server logs the error and refuses to start.
 
@@ -509,6 +521,7 @@ SMTP_USERNAME=
 SMTP_PASSWORD=
 SMTP_USE_TLS=true
 SMTP_VERIFY_TLS=true
+# SMTP_TLS_HOSTNAME=mail.example.com  # Set if connecting via LAN IP
 SMTP_FROM_ADDRESS=keyserver@example.com
 
 # ============================================================
