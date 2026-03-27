@@ -48,8 +48,9 @@ async def lifespan(app: FastAPI):
         validate_config(settings)
         logger.info("Configuration validated successfully")
     except ValueError as e:
-        logger.error(f"Configuration error: {e}")
-        raise
+        logger.error("Configuration error: %s", e)
+        import sys
+        sys.exit(1)
 
     # Import all models (must be done before init_db)
     if settings.keyserver_enabled:
