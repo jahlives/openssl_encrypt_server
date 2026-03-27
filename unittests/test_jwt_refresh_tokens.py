@@ -467,3 +467,74 @@ class TestTokenRevocation:
         assert not token_auth.is_token_revoked(jti)
         token_auth.revoke_token(jti)
         assert token_auth.is_token_revoked(jti)
+
+
+# ---------------------------------------------------------------------------
+# Persistent Token Revocation Tests (Finding #4)
+# ---------------------------------------------------------------------------
+
+
+class TestPersistentRevocationModel:
+    """Tests for the RevokedToken database model."""
+
+    def test_revoked_token_model_exists(self):
+        """RevokedToken model must exist in core auth models."""
+        from openssl_encrypt_server.core.auth.revocation import RevokedToken
+        assert RevokedToken.__tablename__ == "revoked_tokens"
+
+    def test_revoked_token_has_jti_column(self):
+        """RevokedToken must have a jti column (primary key)."""
+        from openssl_encrypt_server.core.auth.revocation import RevokedToken
+        col = RevokedToken.__table__.columns["jti"]
+        assert col.primary_key
+
+    def test_revoked_token_has_expires_at_column(self):
+        """RevokedToken must have expires_at for cleanup."""
+        from openssl_encrypt_server.core.auth.revocation import RevokedToken
+        assert hasattr(RevokedToken, "expires_at")
+
+    def test_revoked_token_has_revoked_at_column(self):
+        """RevokedToken must have revoked_at timestamp."""
+        from openssl_encrypt_server.core.auth.revocation import RevokedToken
+        assert hasattr(RevokedToken, "revoked_at")
+
+
+class TestPersistentRevocationHelpers:
+    """Tests for async revocation persistence helpers."""
+
+    def test_persist_revocation_function_exists(self):
+        """persist_revocation async function must exist."""
+        from openssl_encrypt_server.core.auth.revocation import persist_revocation
+        import asyncio
+        assert asyncio.iscoroutinefunction(persist_revocation)
+
+    def test_load_revoked_jtis_function_exists(self):
+        """load_revoked_jtis async function must exist."""
+        from openssl_encrypt_server.core.auth.revocation import load_revoked_jtis
+        import asyncio
+        assert asyncio.iscoroutinefunction(load_revoked_jtis)
+
+    def test_cleanup_expired_revocations_function_exists(self):
+        """cleanup_expired_revocations async function must exist."""
+        from openssl_encrypt_server.core.auth.revocation import cleanup_expired_revocations
+        import asyncio
+        assert asyncio.iscoroutinefunction(cleanup_expired_revocations)
+
+
+class TestPersistentRevocationMigration:
+    """Tests for the revocation table migration."""
+
+    def test_migration_007_exists(self):
+        """Migration 007_revoked_tokens.sql must exist."""
+        from pathlib import Path
+        migration_path = Path(__file__).parent.parent / "migrations" / "007_revoked_tokens.sql"
+        assert migration_path.exists()
+
+    def test_migration_creates_revoked_tokens_table(self):
+        """Migration must create revoked_tokens table."""
+        from pathlib import Path
+        migration_path = Path(__file__).parent.parent / "migrations" / "007_revoked_tokens.sql"
+        with open(migration_path) as f:
+            sql = f.read()
+        assert "revoked_tokens" in sql
+        assert "CREATE TABLE" in sql
