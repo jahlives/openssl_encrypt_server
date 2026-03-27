@@ -5,6 +5,7 @@ Keyserver business logic.
 Handles key upload, search, and revocation operations.
 """
 
+import hashlib
 import hmac
 import json
 import logging
@@ -36,23 +37,50 @@ class KeyserverService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_client_by_id(self, client_id: str) -> Optional[KSClient]:
+    @staticmethod
+    def compute_client_id_hmac(secret: str, client_id: str) -> str:
         """
-        Look up a client by client_id using constant-time comparison.
+        Compute a deterministic HMAC of a client_id for indexed DB lookup.
+
+        Uses HMAC-SHA256 keyed with the server's token secret, producing a
+        hex digest that can be stored in the client_id_hmac column and queried
+        via a normal WHERE clause — avoiding a full table scan.
+
+        Args:
+            secret: The server's KEYSERVER_TOKEN_SECRET
+            client_id: The client identifier to hash
+
+        Returns:
+            str: 64-character hex digest
+        """
+        return hmac.new(
+            secret.encode("utf-8"),
+            client_id.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    async def get_client_by_id(self, client_id: str, secret: str) -> Optional[KSClient]:
+        """
+        Look up a client by client_id using indexed HMAC column.
+
+        Computes HMAC(secret, client_id) and queries the client_id_hmac column
+        directly (O(1) indexed lookup). Then verifies with constant-time
+        comparison as defense-in-depth against hash collisions.
 
         Args:
             client_id: The client identifier to look up
+            secret: The server's KEYSERVER_TOKEN_SECRET for HMAC computation
 
         Returns:
             KSClient if found, None otherwise
         """
-        stmt = select(KSClient)
+        id_hmac = self.compute_client_id_hmac(secret, client_id)
+        stmt = select(KSClient).where(KSClient.client_id_hmac == id_hmac)
         result = await self.db.execute(stmt)
-        clients = result.scalars().all()
+        client = result.scalars().first()
 
-        for client in clients:
-            if hmac.compare_digest(client.client_id, client_id):
-                return client
+        if client and hmac.compare_digest(client.client_id, client_id):
+            return client
 
         return None
 
@@ -594,7 +622,8 @@ class KeyserverService:
 
         # Create the client account
         client_id = auth.generate_client_id()
-        client = KSClient(client_id=client_id, email=pending.email)
+        client_id_hmac = self.compute_client_id_hmac(auth.secret, client_id)
+        client = KSClient(client_id=client_id, client_id_hmac=client_id_hmac, email=pending.email)
         self.db.add(client)
 
         # Mark pending record as confirmed (keep for polling endpoint)

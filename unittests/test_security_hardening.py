@@ -441,5 +441,99 @@ class TestRegistrationSecretConstantTime(unittest.TestCase):
                            "not == operator, to prevent timing attacks")
 
 
+class TestClientLookupByHash(unittest.TestCase):
+    """Fix 3: Client lookup must use indexed hash column instead of full table scan.
+
+    The previous get_client_by_id loaded ALL client rows into memory to do
+    hmac.compare_digest on each one. This is a DoS vector (memory/CPU exhaustion)
+    that worsens linearly with user count.
+
+    The fix adds a client_id_hmac column: HMAC(server_secret, client_id) stored
+    on registration, enabling direct WHERE lookups without loading all rows.
+    """
+
+    def test_model_has_client_id_hmac_column(self):
+        """KSClient model must have a client_id_hmac column for indexed lookups."""
+        models_path = Path(__file__).parent.parent / "modules" / "keyserver" / "models.py"
+        with open(models_path) as f:
+            source = f.read()
+        self.assertIn("client_id_hmac", source,
+                       "KSClient must have a client_id_hmac column for indexed hash lookup")
+
+    def test_service_does_not_select_all_clients(self):
+        """get_client_by_id must NOT fetch all clients from the database."""
+        service_path = Path(__file__).parent.parent / "modules" / "keyserver" / "service.py"
+        with open(service_path) as f:
+            source = f.read()
+        # Find the get_client_by_id method
+        method_start = source.index("async def get_client_by_id")
+        next_method = source.index("\n    async def ", method_start + 1)
+        method_source = source[method_start:next_method]
+        # Must NOT do a bare select(KSClient) without a WHERE clause
+        self.assertNotIn("select(KSClient)\n", method_source,
+                          "get_client_by_id must not fetch all clients (DoS vector)")
+
+    def test_service_uses_hmac_column_for_lookup(self):
+        """get_client_by_id must query by client_id_hmac column."""
+        service_path = Path(__file__).parent.parent / "modules" / "keyserver" / "service.py"
+        with open(service_path) as f:
+            source = f.read()
+        method_start = source.index("async def get_client_by_id")
+        next_method = source.index("\n    async def ", method_start + 1)
+        method_source = source[method_start:next_method]
+        self.assertIn("client_id_hmac", method_source,
+                       "get_client_by_id must use client_id_hmac for indexed lookup")
+
+    def test_service_still_uses_hmac_compare_digest(self):
+        """get_client_by_id must still verify with constant-time comparison after DB lookup."""
+        service_path = Path(__file__).parent.parent / "modules" / "keyserver" / "service.py"
+        with open(service_path) as f:
+            source = f.read()
+        method_start = source.index("async def get_client_by_id")
+        next_method = source.index("\n    async def ", method_start + 1)
+        method_source = source[method_start:next_method]
+        self.assertIn("hmac.compare_digest", method_source,
+                       "get_client_by_id must still verify with constant-time comparison "
+                       "after hash lookup (defense in depth against hash collisions)")
+
+    def test_service_has_compute_client_id_hmac_helper(self):
+        """Service must have a helper to compute client_id HMAC consistently."""
+        service_path = Path(__file__).parent.parent / "modules" / "keyserver" / "service.py"
+        with open(service_path) as f:
+            source = f.read()
+        self.assertIn("def compute_client_id_hmac", source,
+                       "Service must have a compute_client_id_hmac helper for consistent hashing")
+
+    def test_confirm_registration_sets_hmac(self):
+        """confirm_registration must set client_id_hmac when creating the client."""
+        service_path = Path(__file__).parent.parent / "modules" / "keyserver" / "service.py"
+        with open(service_path) as f:
+            source = f.read()
+        method_start = source.index("async def confirm_registration")
+        next_method = source.index("\n    async def ", method_start + 1)
+        method_source = source[method_start:next_method]
+        self.assertIn("client_id_hmac", method_source,
+                       "confirm_registration must set client_id_hmac when creating KSClient")
+
+    def test_migration_003_exists(self):
+        """Migration 003 must exist for adding client_id_hmac column."""
+        migration_py = Path(__file__).parent.parent / "migrations" / "004_client_id_hmac.py"
+        migration_sql = Path(__file__).parent.parent / "migrations" / "004_client_id_hmac.sql"
+        self.assertTrue(migration_py.exists(),
+                        "Migration 004_client_id_hmac.py must exist")
+        self.assertTrue(migration_sql.exists(),
+                        "Migration 004_client_id_hmac.sql must exist")
+
+    def test_migration_003_adds_column_and_index(self):
+        """Migration SQL must add the client_id_hmac column and an index."""
+        migration_sql = Path(__file__).parent.parent / "migrations" / "004_client_id_hmac.sql"
+        with open(migration_sql) as f:
+            source = f.read()
+        self.assertIn("client_id_hmac", source,
+                       "Migration must add client_id_hmac column")
+        self.assertIn("CREATE INDEX", source.upper(),
+                       "Migration must create an index on client_id_hmac")
+
+
 if __name__ == "__main__":
     unittest.main()

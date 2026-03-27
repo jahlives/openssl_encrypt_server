@@ -139,16 +139,15 @@ async def login(
     Returns:
         RegisterResponse: Access and refresh tokens
     """
+    auth = get_keyserver_auth()
     service = KeyserverService(db)
-    client = await service.get_client_by_id(body.client_id)
+    client = await service.get_client_by_id(body.client_id, auth.secret)
 
     if not client:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
-
-    auth = get_keyserver_auth()
     tokens = auth.create_token_pair(body.client_id)
 
     # Update last seen

@@ -290,6 +290,23 @@ class TokenAuth:
             **new_tokens
         }
 
+    def compute_client_id_hmac(self, client_id: str) -> str:
+        """
+        Compute HMAC-SHA256 of client_id for indexed DB lookup.
+
+        Args:
+            client_id: The client identifier to hash
+
+        Returns:
+            str: 64-character hex digest
+        """
+        import hashlib
+        return hmac.new(
+            self.secret.encode("utf-8"),
+            client_id.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
     async def register_client(self, metadata: Optional[dict] = None) -> dict:
         """
         Register a new client and issue token pair.
@@ -302,9 +319,14 @@ class TokenAuth:
         """
         client_id = self.generate_client_id()
         tokens = self.create_token_pair(client_id)
+        client_id_hmac = self.compute_client_id_hmac(client_id)
 
         async with get_db_session() as session:
-            client = self.client_model(client_id=client_id, metadata=metadata or {})
+            client = self.client_model(
+                client_id=client_id,
+                client_id_hmac=client_id_hmac,
+                metadata=metadata or {},
+            )
             session.add(client)
             await session.commit()
 

@@ -25,6 +25,7 @@ class KSClient(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     client_id = Column(String(64), unique=True, nullable=False, index=True)
+    client_id_hmac = Column(String(64), nullable=True, index=True)  # HMAC(server_secret, client_id) for indexed lookup
     email = Column(String(255), unique=True, nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
