@@ -7,36 +7,13 @@
 
      - [x] **#2 CRITICAL** — Registration secret comparison timing attack → `af22fd5`
      - [x] **#3 CRITICAL** — `get_client_by_id` full table scan DoS → `f691582`
+     - [x] **#1 HIGH** — client_id as sole auth factor → `e3c99d5` (password as 2nd factor with Argon2id)
+     - [x] **#4 HIGH** — Token revocation store in-memory only → `18ea650` (persistent DB store)
+     - [x] **#5 HIGH** — Email enumeration via 409 on registration → `5064aa4` (opaque 202 response)
+     - [x] **#6 HIGH** — Confirmation token lookup not constant-time → `582539b` (HMAC-indexed lookup)
+     - [x] **#7 HIGH** — Email HTML injection in templates → `ba19b08` (html.escape on all values)
 
      ## Remaining
-
-     ### HIGH
-
-     #### #1 — client_id as sole auth factor (architectural)
-     - **Location:** `routes.py` login endpoint, entire auth model
-     - **Issue:** `client_id` is effectively a password — anyone who obtains it gets full access. It's sent in plaintext in the welcome email and displayed in the browser confirmation page. No second factor, no password change, no revocation path for compromised client_ids.
-     - **Risk:** Email interception or account compromise = full account takeover with no mitigation.
-     - **Recommendation:** Consider optional client-side key derivation or document this threat model clearly. Tighten per-IP rate limits on `/login`.
-
-     #### #4 — Token revocation store is in-memory only
-     - **Location:** `core/auth/token.py:84` — `self._revoked_jtis: Set[str] = set()`
-     - **Issue:** Revoked JTIs stored in a Python set. On server restart, all revocation records lost. Revoked refresh tokens become usable again. 7-day refresh token lifetime makes this particularly dangerous.
-     - **Recommendation:** Persist revoked JTIs to database or Redis. Clean up expired JTIs periodically.
-
-     #### #5 — Email enumeration via 409 on registration
-     - **Location:** `service.py` `create_pending_registration` — returns 409 if email exists
-     - **Issue:** `/register/email` reveals whether an email is already registered. Rate limit of 5/hour helps but doesn't eliminate risk.
-     - **Recommendation:** Always return 202 regardless. If email exists, send "someone tried to register" notification instead.
-
-     #### #6 — Confirmation token lookup not constant-time
-     - **Location:** `service.py` `confirm_registration` and `check_registration_status`
-     - **Issue:** Direct SQL WHERE equality on confirmation_token and registration_id. 256-bit entropy makes practical exploitation extremely unlikely, but inconsistent with constant-time philosophy applied elsewhere.
-     - **Recommendation:** Low priority given token entropy. Could apply same HMAC-column pattern if desired.
-
-     #### #7 — Email HTML injection in welcome/confirmation emails
-     - **Location:** `core/email.py:108-119` — `send_welcome_email` and `send_confirmation_email`
-     - **Issue:** `client_id`, `token`, and `base_url` interpolated into HTML without escaping. Currently safe (hex values, admin-controlled base_url) but fragile.
-     - **Recommendation:** Use `html.escape()` for all interpolated values in email templates, as already done in `_render_confirmation_html`.
 
      ### MEDIUM
 
