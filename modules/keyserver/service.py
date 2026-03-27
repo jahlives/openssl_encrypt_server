@@ -14,6 +14,8 @@ import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
 from fastapi import HTTPException, status
 from sqlalchemy import delete, or_, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +31,12 @@ from .verification import (
 )
 
 logger = logging.getLogger(__name__)
+
+_ph = PasswordHasher()
+# Dummy hash for constant-time behavior when client_id is invalid.
+# Prevents timing oracle that distinguishes "invalid client_id" (fast)
+# from "valid client_id, wrong password" (slow Argon2 verify).
+_DUMMY_HASH = _ph.hash("dummy_timing_protection")
 
 
 class KeyserverService:
@@ -83,6 +91,147 @@ class KeyserverService:
             return client
 
         return None
+
+    @staticmethod
+    def hash_password(password: str) -> str:
+        """
+        Hash a password using Argon2id.
+
+        Args:
+            password: The plaintext password to hash
+
+        Returns:
+            str: Argon2id encoded hash string
+        """
+        return _ph.hash(password)
+
+    async def verify_client_password(self, client: KSClient, password: str) -> bool:
+        """
+        Verify a password against a client's stored hash.
+
+        Handles Argon2 parameter upgrades transparently via check_needs_rehash.
+
+        Args:
+            client: The KSClient record
+            password: The plaintext password to verify
+
+        Returns:
+            bool: True if password matches, False otherwise
+        """
+        if client.password_hash is None:
+            return False
+        try:
+            _ph.verify(client.password_hash, password)
+            if _ph.check_needs_rehash(client.password_hash):
+                client.password_hash = _ph.hash(password)
+                await self.db.commit()
+            return True
+        except VerifyMismatchError:
+            return False
+
+    async def set_client_password(self, client_id: str, password: str, secret: str) -> bool:
+        """
+        Set or update a client's password.
+
+        Args:
+            client_id: The client identifier
+            password: The new plaintext password
+            secret: Server token secret for client lookup
+
+        Returns:
+            bool: True if password was set, False if client not found
+        """
+        client = await self.get_client_by_id(client_id, secret)
+        if not client:
+            return False
+        client.password_hash = _ph.hash(password)
+        await self.db.commit()
+        return True
+
+    async def validate_confirmation_token(self, token: str) -> KSPendingRegistration:
+        """
+        Validate a confirmation token without creating the account.
+
+        Args:
+            token: Confirmation token from email link
+
+        Returns:
+            KSPendingRegistration: The pending registration record
+
+        Raises:
+            HTTPException: 404 if token not found, 410 if expired
+        """
+        stmt = select(KSPendingRegistration).where(
+            KSPendingRegistration.confirmation_token == token
+        )
+        result = await self.db.execute(stmt)
+        pending = result.scalar_one_or_none()
+
+        if not pending:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Invalid confirmation token",
+            )
+
+        if pending.status == "confirmed":
+            return pending
+
+        if pending.expires_at < datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="Confirmation link has expired. Please register again.",
+            )
+
+        return pending
+
+    async def confirm_registration_with_password(
+        self, token: str, password: str, auth, email_service
+    ) -> dict:
+        """
+        Confirm a pending registration with a password and create the account.
+
+        Args:
+            token: Confirmation token from email link
+            password: User-chosen password to hash and store
+            auth: TokenAuth instance for generating client_id
+            email_service: EmailService instance for sending welcome email
+
+        Returns:
+            dict: Contains client_id
+
+        Raises:
+            HTTPException: 404 if token not found, 410 if expired
+        """
+        pending = await self.validate_confirmation_token(token)
+
+        if pending.status == "confirmed":
+            return {"client_id": pending.client_id}
+
+        # Create the client account with password hash
+        client_id = auth.generate_client_id()
+        client_id_hmac = self.compute_client_id_hmac(auth.secret, client_id)
+        password_hash = _ph.hash(password)
+        client = KSClient(
+            client_id=client_id,
+            client_id_hmac=client_id_hmac,
+            password_hash=password_hash,
+            email=pending.email,
+        )
+        self.db.add(client)
+
+        # Mark pending record as confirmed (keep for polling endpoint)
+        pending.status = "confirmed"
+        pending.client_id = client_id
+        pending.confirmed_at = datetime.now(timezone.utc)
+
+        await self.db.commit()
+
+        # Send welcome email with client_id
+        await email_service.send_welcome_email(pending.email, client_id)
+
+        logger.info(f"Registration confirmed for {pending.email}, client_id: {client_id[:8]}...")
+
+        return {"client_id": client_id}
 
     async def generate_challenge(
         self,

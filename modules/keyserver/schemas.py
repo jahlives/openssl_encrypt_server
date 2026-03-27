@@ -26,6 +26,7 @@ class LoginRequest(BaseModel):
     """Request body for client login."""
 
     client_id: str = Field(..., min_length=1, max_length=255)
+    password: Optional[str] = Field(None, min_length=8, max_length=128)
 
 
 class RefreshRequest(BaseModel):
@@ -184,6 +185,26 @@ class KeyUploadWithPoP(KeyBundleSchema):
             "b'POP:' + nonce_hex.encode('ascii') + b':' + fingerprint.encode('utf-8')"
         ),
     )
+
+
+class ConfirmWithPasswordRequest(BaseModel):
+    """Request body for confirming registration with a password."""
+
+    password: str = Field(..., min_length=12, max_length=128)
+
+
+class SetPasswordRequest(BaseModel):
+    """Request body for legacy clients setting their password."""
+
+    client_id: str = Field(..., min_length=1, max_length=255)
+    password: str = Field(..., min_length=12, max_length=128)
+
+
+class PasswordRequiredResponse(BaseModel):
+    """Returned when a legacy client attempts login without a password."""
+
+    status: str = "password_required"
+    message: str = "Password setup required. Please set a password to continue."
 
 
 class ErrorResponse(BaseModel):

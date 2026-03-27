@@ -27,6 +27,7 @@ from .schemas import (
     ChallengeRequest,
     ChallengeResponse,
     ConfirmationResponse,
+    ConfirmWithPasswordRequest,
     EmailRegisterRequest,
     EmailRegisterResponse,
     ErrorResponse,
@@ -40,8 +41,9 @@ from .schemas import (
     RegistrationStatusResponse,
     RevocationRequest,
     RevocationResponse,
+    SetPasswordRequest,
 )
-from .service import KeyserverService
+from .service import KeyserverService, _DUMMY_HASH, _ph
 
 logger = logging.getLogger(__name__)
 
@@ -110,9 +112,10 @@ async def register(
     response_model=RegisterResponse,
     status_code=status.HTTP_200_OK,
     responses={
-        401: {"model": ErrorResponse, "description": "Invalid client ID"},
+        401: {"model": ErrorResponse, "description": "Invalid credentials"},
+        403: {"description": "Password setup required (legacy client)"},
     },
-    summary="Login with client ID",
+    summary="Login with client ID and password",
 )
 @limiter.limit("5/minute")
 async def login(
@@ -121,33 +124,72 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Authenticate with client_id and obtain JWT tokens.
-
-    Use this endpoint when you have a client_id (from registration email)
-    but need to obtain JWT access and refresh tokens for API operations.
+    Authenticate with client_id and password to obtain JWT tokens.
 
     SECURITY:
     - Strict rate limiting (5/minute) to prevent brute force
-    - Returns generic error for invalid client_id (no enumeration)
+    - Returns generic error for invalid credentials (no enumeration)
     - Uses constant-time comparison internally
+    - Dummy Argon2 verify on invalid client_id to prevent timing oracle
+
+    Legacy clients (no password set):
+    - If no password provided: returns 403 {"status": "password_required"}
+    - If password provided: sets it as the account password and issues tokens
 
     Args:
         request: FastAPI request
-        body: LoginRequest containing the client_id
+        body: LoginRequest containing client_id and optional password
         db: Database session
 
     Returns:
         RegisterResponse: Access and refresh tokens
     """
+    from argon2.exceptions import VerifyMismatchError as _VerifyMismatchError
+
     auth = get_keyserver_auth()
     service = KeyserverService(db)
     client = await service.get_client_by_id(body.client_id, auth.secret)
 
     if not client:
+        # Dummy Argon2 verify to prevent timing oracle
+        if body.password:
+            try:
+                _ph.verify(_DUMMY_HASH, body.password)
+            except _VerifyMismatchError:
+                pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
+
+    # Legacy client: no password_hash set yet
+    if client.password_hash is None:
+        if body.password is None:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={
+                    "status": "password_required",
+                    "message": "Password setup required. Please set a password to continue.",
+                },
+            )
+        else:
+            # Legacy client providing password for first time — set it
+            client.password_hash = _ph.hash(body.password)
+            await db.commit()
+    else:
+        # Normal path: verify password
+        if body.password is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+        if not await service.verify_client_password(client, body.password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+
     tokens = auth.create_token_pair(body.client_id)
 
     # Update last seen
@@ -224,7 +266,7 @@ async def register_email(
         404: {"model": ErrorResponse, "description": "Invalid token"},
         410: {"model": ErrorResponse, "description": "Token expired"},
     },
-    summary="Confirm email registration",
+    summary="Confirm email registration (view password form)",
 )
 @limiter.limit("20/hour")
 async def confirm_registration(
@@ -233,12 +275,78 @@ async def confirm_registration(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Confirm email registration and activate the account.
+    Validate confirmation token and serve password form.
 
-    Returns the client_id and sends a welcome email containing it.
+    For browsers: renders an HTML page with a password form.
+    For API clients: returns JSON indicating the token is valid.
+
+    The account is NOT created until the password is submitted via POST.
 
     Args:
         token: Confirmation token from the email link
+        request: FastAPI request
+        db: Database session
+
+    Returns:
+        HTML password form (browsers) or JSON validation response (API)
+    """
+    service = KeyserverService(db)
+
+    accept = request.headers.get("accept", "")
+    is_browser = "text/html" in accept
+
+    try:
+        pending = await service.validate_confirmation_token(token)
+    except HTTPException as e:
+        if is_browser:
+            return HTMLResponse(
+                content=_render_error_html(e.status_code, e.detail),
+                status_code=e.status_code,
+            )
+        raise
+
+    # Already confirmed — show client_id
+    if pending.status == "confirmed":
+        if is_browser:
+            return HTMLResponse(content=_render_confirmation_html(pending.client_id))
+        return ConfirmationResponse(
+            client_id=pending.client_id,
+            message="Account already activated.",
+        )
+
+    # Pending — show password form
+    if is_browser:
+        return HTMLResponse(content=_render_password_form_html(token))
+
+    return {"status": "valid", "message": "Token valid. Submit POST with password to complete registration."}
+
+
+@router.post(
+    "/confirm/{token}",
+    response_model=ConfirmationResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"model": ErrorResponse, "description": "Invalid token"},
+        410: {"model": ErrorResponse, "description": "Token expired"},
+        422: {"model": ErrorResponse, "description": "Invalid password"},
+    },
+    summary="Complete registration with password",
+)
+@limiter.limit("20/hour")
+async def confirm_registration_with_password(
+    request: Request,
+    token: str,
+    body: ConfirmWithPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Complete email registration by setting a password.
+
+    Creates the account with the provided password and returns the client_id.
+
+    Args:
+        token: Confirmation token from the email link
+        body: ConfirmWithPasswordRequest containing the password
         request: FastAPI request
         db: Database session
 
@@ -263,7 +371,9 @@ async def confirm_registration(
     is_browser = "text/html" in accept
 
     try:
-        result = await service.confirm_registration(token, auth, email_service)
+        result = await service.confirm_registration_with_password(
+            token, body.password, auth, email_service
+        )
     except HTTPException as e:
         if is_browser:
             return HTMLResponse(
@@ -380,6 +490,169 @@ def _render_confirmation_html(client_id: str) -> str:
 </html>"""
 
 
+def _render_password_form_html(token: str) -> str:
+    """Render the browser-friendly password form for registration confirmation."""
+    import html as _html
+    safe_token = _html.escape(token)
+
+    return f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Set Your Password</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 520px;
+            margin: 60px auto;
+            padding: 0 20px;
+            color: #1a1a1a;
+            background: #f8f9fa;
+        }}
+        .card {{
+            background: #fff;
+            border-radius: 8px;
+            padding: 32px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }}
+        h1 {{
+            color: #2563eb;
+            font-size: 24px;
+            margin-top: 0;
+        }}
+        label {{
+            display: block;
+            margin-top: 16px;
+            font-weight: 600;
+            font-size: 14px;
+        }}
+        input[type="password"] {{
+            width: 100%;
+            padding: 10px 12px;
+            margin-top: 6px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 15px;
+            box-sizing: border-box;
+        }}
+        input[type="password"]:focus {{
+            outline: none;
+            border-color: #2563eb;
+            box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+        }}
+        .submit-btn {{
+            display: block;
+            width: 100%;
+            margin-top: 20px;
+            padding: 12px;
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: 600;
+        }}
+        .submit-btn:hover {{
+            background: #1d4ed8;
+        }}
+        .submit-btn:disabled {{
+            background: #9ca3af;
+            cursor: not-allowed;
+        }}
+        .error {{
+            color: #dc2626;
+            font-size: 13px;
+            margin-top: 6px;
+            display: none;
+        }}
+        .hint {{
+            color: #6b7280;
+            font-size: 13px;
+            margin-top: 4px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Set Your Password</h1>
+        <p>Choose a password to secure your keyserver account.</p>
+        <form id="passwordForm" onsubmit="return submitForm(event)">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password"
+                   minlength="12" maxlength="128" required
+                   autocomplete="new-password"
+                   placeholder="Minimum 12 characters">
+            <p class="hint">Must be at least 12 characters.</p>
+
+            <label for="confirmPassword">Confirm Password</label>
+            <input type="password" id="confirmPassword" name="confirmPassword"
+                   minlength="12" maxlength="128" required
+                   autocomplete="new-password"
+                   placeholder="Re-enter your password">
+            <p class="error" id="matchError">Passwords do not match.</p>
+            <p class="error" id="submitError"></p>
+
+            <button type="submit" class="submit-btn" id="submitBtn">Create Account</button>
+        </form>
+    </div>
+    <script>
+        async function submitForm(e) {{
+            e.preventDefault();
+            var pw = document.getElementById('password').value;
+            var cpw = document.getElementById('confirmPassword').value;
+            var matchErr = document.getElementById('matchError');
+            var submitErr = document.getElementById('submitError');
+            var btn = document.getElementById('submitBtn');
+
+            matchErr.style.display = 'none';
+            submitErr.style.display = 'none';
+
+            if (pw !== cpw) {{
+                matchErr.style.display = 'block';
+                return false;
+            }}
+            if (pw.length < 12) {{
+                submitErr.textContent = 'Password must be at least 12 characters.';
+                submitErr.style.display = 'block';
+                return false;
+            }}
+
+            btn.disabled = true;
+            btn.textContent = 'Creating account...';
+
+            try {{
+                var resp = await fetch('/api/v1/keys/confirm/{safe_token}', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json', 'Accept': 'text/html'}},
+                    body: JSON.stringify({{password: pw}})
+                }});
+                if (resp.ok) {{
+                    document.open();
+                    document.write(await resp.text());
+                    document.close();
+                }} else {{
+                    var data = await resp.json().catch(function() {{ return {{detail: 'Registration failed.'}}; }});
+                    submitErr.textContent = data.detail || 'Registration failed.';
+                    submitErr.style.display = 'block';
+                    btn.disabled = false;
+                    btn.textContent = 'Create Account';
+                }}
+            }} catch (err) {{
+                submitErr.textContent = 'Network error. Please try again.';
+                submitErr.style.display = 'block';
+                btn.disabled = false;
+                btn.textContent = 'Create Account';
+            }}
+            return false;
+        }}
+    </script>
+</body>
+</html>"""
+
+
 def _render_error_html(status_code: int, detail: str) -> str:
     """Render a browser-friendly error page for confirmation failures."""
     import html
@@ -468,6 +741,79 @@ async def registration_status(
     result = await service.check_registration_status(registration_id, auth)
 
     return RegistrationStatusResponse(**result)
+
+
+@router.post(
+    "/set-password",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        401: {"model": ErrorResponse, "description": "Invalid client ID"},
+        409: {"model": ErrorResponse, "description": "Password already set"},
+    },
+    summary="Set password for legacy account",
+)
+@limiter.limit("3/hour")
+async def set_password(
+    request: Request,
+    body: SetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Set a password for a legacy account that was created before password auth.
+
+    This endpoint is for clients that received a 403 "password_required" from
+    /login. It accepts client_id + new password, sets the password, and returns
+    JWT tokens.
+
+    Aggressively rate-limited (3/hour) since it accepts client_id without
+    any prior authentication.
+
+    Args:
+        request: FastAPI request
+        body: SetPasswordRequest with client_id and password
+        db: Database session
+
+    Returns:
+        RegisterResponse: Access and refresh tokens
+    """
+    from argon2.exceptions import VerifyMismatchError as _VerifyMismatchError
+
+    auth = get_keyserver_auth()
+    service = KeyserverService(db)
+    client = await service.get_client_by_id(body.client_id, auth.secret)
+
+    if not client:
+        # Dummy Argon2 verify for timing protection
+        try:
+            _ph.verify(_DUMMY_HASH, body.password)
+        except _VerifyMismatchError:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
+
+    if client.password_hash is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Password already set. Use /change-password to update it.",
+        )
+
+    client.password_hash = _ph.hash(body.password)
+    await db.commit()
+
+    tokens = auth.create_token_pair(body.client_id)
+
+    return RegisterResponse(
+        client_id=body.client_id,
+        token=tokens["access_token"],
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        expires_at=tokens["access_token_expires_at"],
+        refresh_expires_at=tokens["refresh_token_expires_at"],
+        token_type=tokens["token_type"],
+    )
 
 
 @router.post(
