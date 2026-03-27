@@ -245,10 +245,8 @@ class TestCreatePendingRegistration:
         assert "https://keys.example.com" in call_args[0][2]  # base_url in link
 
     @pytest.mark.asyncio
-    async def test_rejects_duplicate_email_existing_account(self, service, mock_db):
-        """Rejects registration if email already has an active account."""
-        from fastapi import HTTPException
-
+    async def test_existing_account_returns_opaque_response(self, service, mock_db):
+        """Existing account returns same 202-shaped response to prevent email enumeration (#5)."""
         # First query (KSClient) returns an existing client
         existing_client = MagicMock()
         existing_client.email = "user@example.com"
@@ -259,11 +257,47 @@ class TestCreatePendingRegistration:
 
         mock_email_service = AsyncMock()
 
-        with pytest.raises(HTTPException) as exc_info:
-            await service.create_pending_registration(
-                "user@example.com", "https://keys.example.com", mock_email_service
-            )
-        assert exc_info.value.status_code == 409
+        # Should NOT raise — returns opaque response indistinguishable from success
+        result = await service.create_pending_registration(
+            "user@example.com", "https://keys.example.com", mock_email_service
+        )
+        assert "registration_id" in result
+
+    @pytest.mark.asyncio
+    async def test_existing_account_does_not_send_confirmation_email(self, service, mock_db):
+        """Existing account must not send a confirmation email."""
+        existing_client = MagicMock()
+        existing_client.email = "user@example.com"
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = existing_client
+        mock_db.execute.return_value = mock_result
+
+        mock_email_service = AsyncMock()
+
+        await service.create_pending_registration(
+            "user@example.com", "https://keys.example.com", mock_email_service
+        )
+        mock_email_service.send_confirmation_email.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_existing_account_sends_notification_email(self, service, mock_db):
+        """Existing account sends a notification that someone tried to register."""
+        existing_client = MagicMock()
+        existing_client.email = "user@example.com"
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = existing_client
+        mock_db.execute.return_value = mock_result
+
+        mock_email_service = AsyncMock()
+
+        await service.create_pending_registration(
+            "user@example.com", "https://keys.example.com", mock_email_service
+        )
+        mock_email_service.send_duplicate_registration_notice.assert_called_once_with(
+            "user@example.com"
+        )
 
     @pytest.mark.asyncio
     async def test_resends_email_for_existing_pending(self, service, mock_db):

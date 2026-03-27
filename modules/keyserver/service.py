@@ -525,10 +525,8 @@ class KeyserverService:
             email_service: EmailService instance for sending emails
 
         Returns:
-            dict: Contains registration_id and confirmation_token
-
-        Raises:
-            HTTPException: 409 if email already has an active account
+            dict: Contains registration_id (opaque, always returned to prevent
+            email enumeration)
         """
         # Check if email already has an active account
         stmt = select(KSClient).where(KSClient.email == email)
@@ -536,10 +534,14 @@ class KeyserverService:
         existing_client = result.scalar_one_or_none()
 
         if existing_client:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="An account with this email already exists",
-            )
+            # Return opaque response to prevent email enumeration (#5).
+            # Send notification to existing account holder instead.
+            await email_service.send_duplicate_registration_notice(email)
+            logger.info("Registration attempt for existing email (opaque response returned)")
+            return {
+                "registration_id": secrets.token_urlsafe(32),
+                "token": secrets.token_urlsafe(32),
+            }
 
         # Check for existing pending registration
         stmt = select(KSPendingRegistration).where(KSPendingRegistration.email == email)

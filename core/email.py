@@ -126,3 +126,26 @@ class EmailService:
 </html>"""
 
         await self._send_email(email, "Keyserver Registration Complete", body)
+
+    async def send_duplicate_registration_notice(self, email: str) -> None:
+        """
+        Send a notification that someone attempted to register with an existing email.
+
+        This replaces a 409 error response to prevent email enumeration.
+
+        Args:
+            email: Recipient email address (the existing account holder)
+        """
+        safe_email = html_mod.escape(email)
+
+        body = f"""\
+<html>
+<body>
+<h2>Registration Attempt Noticed</h2>
+<p>Someone attempted to register a new keyserver account using your email address ({safe_email}).</p>
+<p>If this was you, no action is needed — your existing account is still active.</p>
+<p>If you did not initiate this request, you can safely ignore this email. Your account has not been affected.</p>
+</body>
+</html>"""
+
+        await self._send_email(email, "Keyserver Registration Attempt", body)

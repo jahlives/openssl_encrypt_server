@@ -171,9 +171,6 @@ async def login(
     "/register/email",
     response_model=EmailRegisterResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    responses={
-        409: {"model": ErrorResponse, "description": "Email already registered"},
-    },
     summary="Register with email confirmation",
 )
 @limiter.limit("5/hour")
