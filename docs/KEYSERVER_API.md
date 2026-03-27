@@ -55,9 +55,10 @@ The keyserver uses JWT Bearer tokens for authenticated operations.
 | Endpoint | Purpose |
 |----------|---------|
 | `POST /register` | Anonymous registration |
-| `POST /login` | Login with client_id |
+| `POST /login` | Login with client_id + password |
 | `POST /register/email` | Email registration |
-| `GET /confirm/{token}` | Email confirmation |
+| `GET /confirm/{token}` | Validate token, show password form |
+| `POST /confirm/{token}` | Complete registration with password |
 | `GET /register/status/{id}` | Poll registration status |
 | `GET /search` | Search for public keys |
 | `POST /refresh` | Refresh expired token |
@@ -125,8 +126,8 @@ Active clients are never locked out:
 | Scenario | Result | Resolution |
 |----------|--------|------------|
 | Access token expired, refresh token valid | Refresh succeeds | Automatic (plugin handles this) |
-| Both tokens expired (7+ days inactive) | 401 on all requests | `POST /login` with client_id |
-| Refresh token reused (replay) | 401 Unauthorized | `POST /login` with client_id |
+| Both tokens expired (7+ days inactive) | 401 on all requests | `POST /login` with client_id + password |
+| Refresh token reused (replay) | 401 Unauthorized | `POST /login` with client_id + password |
 
 ---
 
@@ -174,7 +175,7 @@ POST /api/v1/keys/register
 
 ### Login
 
-Exchange a client_id for JWT access and refresh tokens.
+Exchange a client_id and password for JWT access and refresh tokens.
 
 ```
 POST /api/v1/keys/login
@@ -186,9 +187,12 @@ POST /api/v1/keys/login
 
 ```json
 {
-  "client_id": "cd94f345a0067203e01212fb4fa9ff8b"
+  "client_id": "cd94f345a0067203e01212fb4fa9ff8b",
+  "password": "your-secure-password"
 }
 ```
+
+The `password` field is required for accounts registered with a password (email-confirmed registration). Legacy accounts registered without a password will receive a `403` prompting them to set one.
 
 **Response:** `200 OK`
 
@@ -208,12 +212,14 @@ POST /api/v1/keys/login
 
 | Status | Condition | Detail |
 |--------|-----------|--------|
-| 401 | Invalid client_id | `"Invalid credentials"` |
+| 401 | Invalid client_id or wrong password | `"Invalid credentials"` |
+| 403 | Legacy account without password | `"Password required"` (with instructions to set one) |
 
 **Security:**
 - Strict rate limiting (5/min) prevents brute force
 - Constant-time comparison via `hmac.compare_digest`
-- Generic error message prevents client_id enumeration
+- Password verified with Argon2id (time-hard, memory-hard KDF)
+- Generic error message prevents client_id/password enumeration
 
 ---
 
@@ -256,15 +262,62 @@ POST /api/v1/keys/register/email
 
 ---
 
-### Email Confirmation
+### Email Confirmation (Step 1: Validate Token)
 
-Confirm email registration by clicking the link from the confirmation email.
+Validate the confirmation token from the email link. For browsers, renders a password form. For API clients, returns a JSON status indicating the token is valid.
 
 ```
 GET /api/v1/keys/confirm/{token}
 ```
 
 **Rate limit:** 20/hour
+
+**Response (API client, token valid):** `200 OK`
+
+```json
+{
+  "status": "valid",
+  "message": "Token valid. Submit POST with password to complete registration."
+}
+```
+
+**Response (browser):** HTML page with a password form.
+
+**Response (already confirmed):** `200 OK`
+
+```json
+{
+  "client_id": "cd94f345a0067203e01212fb4fa9ff8b",
+  "message": "Account already activated."
+}
+```
+
+**Errors:**
+
+| Status | Condition | Detail |
+|--------|-----------|--------|
+| 404 | Invalid token | `"Invalid confirmation token"` |
+| 410 | Token expired (>30 min) | `"Confirmation link has expired. Please register again."` |
+
+---
+
+### Email Confirmation (Step 2: Set Password)
+
+Complete email registration by submitting a password. Creates the account with Argon2id-hashed password.
+
+```
+POST /api/v1/keys/confirm/{token}
+```
+
+**Rate limit:** 20/hour
+
+**Request body:**
+
+```json
+{
+  "password": "your-secure-password-min-12-chars"
+}
+```
 
 **Response (API client):** `200 OK`
 
@@ -275,7 +328,7 @@ GET /api/v1/keys/confirm/{token}
 }
 ```
 
-**Response (browser):** HTML page displaying the client_id with styling.
+**Response (browser):** HTML page displaying the client_id with copy-to-clipboard button.
 
 **Errors:**
 
@@ -283,10 +336,12 @@ GET /api/v1/keys/confirm/{token}
 |--------|-----------|--------|
 | 404 | Invalid token | `"Invalid confirmation token"` |
 | 410 | Token expired (>30 min) | `"Confirmation link has expired. Please register again."` |
+| 422 | Password too short/long | Validation error (min 12, max 128 chars) |
 
 **Notes:**
 - Browser detection via `Accept: text/html` header
 - Sends a welcome email containing the client_id
+- Password is hashed with Argon2id before storage
 - The client plugin obtains JWT tokens by polling the status endpoint (not from this response)
 
 ---
@@ -555,7 +610,16 @@ POST /api/v1/keys/refresh
 
 ```json
 {
-  "client_id": "string (1-255 chars)"
+  "client_id": "string (1-255 chars)",
+  "password": "string (8-128 chars, optional for legacy accounts)"
+}
+```
+
+### ConfirmWithPasswordRequest
+
+```json
+{
+  "password": "string (12-128 chars, required)"
 }
 ```
 
@@ -695,7 +759,7 @@ Client                                Server
 ### Email-Confirmed Registration Flow
 
 ```
-Client (Plugin)          Server                    User (Email)
+Client (Plugin)          Server                    User (Browser/Email)
   |                        |                           |
   |  POST /register/email  |                           |
   |  {"email": "..."}      |                           |
@@ -713,6 +777,13 @@ Client (Plugin)          Server                    User (Email)
   |                        |                           |
   |  ... polling ...       |   GET /confirm/{token}    |
   |                        |<--------------------------|
+  |                        |  Validate token           |
+  |                        |  200 OK (password form)-->|
+  |                        |                           |
+  |                        |   POST /confirm/{token}   |
+  |                        |   {"password": "..."}     |
+  |                        |<--------------------------|
+  |                        |  Hash password (Argon2id) |
   |                        |  Create KSClient          |
   |                        |  Mark confirmed           |
   |                        |  Send welcome email       |
@@ -738,9 +809,11 @@ For users who registered via email and confirmed in a browser:
 Client                                Server
   |                                      |
   |  POST /login                         |
-  |  {"client_id": "cd94f345..."}        |
+  |  {"client_id": "cd94f345...",        |
+  |   "password": "..."}                 |
   |------------------------------------->|
   |                                      |  Constant-time lookup
+  |                                      |  Verify password (Argon2id)
   |                                      |  Generate token pair
   |  200 OK                              |  Update last_seen
   |  {client_id, access_token,           |
@@ -857,6 +930,7 @@ All rate limits are per-client-IP using the `slowapi` library.
 | `/login` | POST | 5/minute | Prevent brute force |
 | `/register/email` | POST | 5/hour | Prevent email spam |
 | `/confirm/{token}` | GET | 20/hour | Reasonable for email clicks |
+| `/confirm/{token}` | POST | 20/hour | Password submission |
 | `/register/status/{id}` | GET | 60/hour | Allow polling |
 | `/` (upload) | POST | 60/minute | Allow normal uploads |
 | `/search` | GET | 100/minute | Allow public lookups |
