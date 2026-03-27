@@ -43,14 +43,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Debug mode: {settings.debug}")
     logger.info("=" * 60)
 
-    # Validate configuration
-    try:
-        validate_config(settings)
-        logger.info("Configuration validated successfully")
-    except ValueError as e:
-        logger.error("Configuration error: %s", e)
-        import sys
-        sys.exit(1)
+    # Configuration already validated in create_app()
 
     # Import all models (must be done before init_db)
     if settings.keyserver_enabled:
@@ -115,6 +108,14 @@ def create_app() -> FastAPI:
     Returns:
         FastAPI: Configured application
     """
+    # Validate configuration early, before uvicorn lifespan starts.
+    # This produces a clean error message without async traceback noise.
+    try:
+        validate_config(settings)
+    except ValueError as e:
+        logger.error("Configuration error: %s", e)
+        raise SystemExit(1)
+
     app = FastAPI(
         title=settings.app_name,
         version=settings.version,
