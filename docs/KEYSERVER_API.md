@@ -387,6 +387,7 @@ GET /api/v1/keys/register/status/{registration_id}
 **Notes:**
 - JWT tokens are only delivered once. After delivery, the pending record is deleted.
 - Confirmed records are kept for 5 minutes as a grace period for late polling.
+- **Recovery:** If the client misses the token delivery (e.g. network drop), the account still exists. Use `POST /login` with `client_id` and `password` to obtain new tokens. The `client_id` is included in the welcome email sent at confirmation time.
 
 ---
 
